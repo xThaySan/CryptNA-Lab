@@ -42,13 +42,17 @@ func main() {
 	cfg := mustLoadJSON[ClientConfig]("/app/config.json")
 	id := mustLoadJSON[ClientIdentity]("/app/identity.json")
 
+	ephPriv, ephPub := mustGenerateX25519()
+
 	req := AccessRequest{
 		ClientPubKey: id.ClientStaticPub,
 		ServiceID:    cfg.ServiceID,
 		ClientSPI:    "0x1001",
-		ClientDHPub:  "fake-client-dh",
+		ClientDHPub:  ephPub,
 		AEADSuites:   cfg.AEADSuites,
 	}
+
+	_ = ephPriv // utilisé plus tard pour dériver la clé IPSec
 
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -109,4 +113,22 @@ func mustLoadJSON[T any](path string) T {
 	}
 
 	return out
+}
+
+func mustGenerateX25519() (string, string) {
+	priv := make([]byte, 32)
+	if _, err := rand.Read(priv); err != nil {
+		log.Fatal(err)
+	}
+
+	priv[0] &= 248
+	priv[31] &= 127
+	priv[31] |= 64
+
+	pub, err := curve25519.X25519(priv, curve25519.Basepoint)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return base64.StdEncoding.EncodeToString(priv), base64.StdEncoding.EncodeToString(pub)
 }
