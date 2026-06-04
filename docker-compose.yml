@@ -12,7 +12,6 @@ services:
   pdp:
     build: ./pdp
     container_name: cryptna-pdp
-    command: sleep infinity
     networks:
       control_net:
         ipv4_address: 172.20.0.20
