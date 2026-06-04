@@ -4,9 +4,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/base64"
 	"log"
 	"net/http"
 	"time"
+
+	"golang.org/x/crypto/curve25519"
 )
 
 type ActivateRequest struct {
@@ -52,12 +55,13 @@ func main() {
 		}
 
 		lifetime := 60
+		_, pepDHPub := mustGenerateX25519()
 		resp := ActivateResponse{
 			ServiceID:  req.ServiceID,
 			PEPAddress: "172.21.0.40",
 			PEPPort:    4500,
 			PEPSPI:     randomHex(4),
-			PEPDHPub:   randomHex(32),
+			PEPDHPub:   pepDHPub,
 			AEAD:       aead,
 			SALifetime: lifetime,
 			ExpiresAt:  time.Now().Add(time.Duration(lifetime) * time.Second).UTC().Format(time.RFC3339),
@@ -82,4 +86,22 @@ func randomHex(n int) string {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+func mustGenerateX25519() (string, string) {
+	priv := make([]byte, 32)
+	if _, err := rand.Read(priv); err != nil {
+		log.Fatal(err)
+	}
+
+	priv[0] &= 248
+	priv[31] &= 127
+	priv[31] |= 64
+
+	pub, err := curve25519.X25519(priv, curve25519.Basepoint)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return base64.StdEncoding.EncodeToString(priv), base64.StdEncoding.EncodeToString(pub)
 }
