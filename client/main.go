@@ -33,6 +33,17 @@ type AccessRequest struct {
 	AEADSuites   []string `json:"aead_suites"`
 }
 
+type AccessResponse struct {
+	Authorized bool           `json:"authorized"`
+	Reason     string         `json:"reason"`
+	Tunnel     TunnelResponse `json:"tunnel"`
+}
+
+type TunnelResponse struct {
+	PEPDHPub          string `json:"pep_dh_pub"`
+	DebugSharedSecret string `json:"debug_shared_secret"`
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "gen-identity" {
 		genIdentity()
@@ -65,13 +76,23 @@ func main() {
 	}
 	defer resp.Body.Close()
 
-	var out any
+	var out AccessResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		log.Fatal(err)
 	}
 
+	clientShared := mustDeriveSharedSecret(ephPriv, out.Tunnel.PEPDHPub)
+
 	pretty, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(pretty))
+	fmt.Println("client_shared_secret:", clientShared)
+	fmt.Println("pep_shared_secret:   ", out.Tunnel.DebugSharedSecret)
+
+	if clientShared == out.Tunnel.DebugSharedSecret {
+		fmt.Println("DH OK: shared secrets match")
+	} else {
+		fmt.Println("DH ERROR: shared secrets differ")
+	}
 }
 
 func genIdentity() {
@@ -131,4 +152,23 @@ func mustGenerateX25519() (string, string) {
 	}
 
 	return base64.StdEncoding.EncodeToString(priv), base64.StdEncoding.EncodeToString(pub)
+}
+
+func mustDeriveSharedSecret(privB64, pubB64 string) string {
+	priv, err := base64.StdEncoding.DecodeString(privB64)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	pub, err := base64.StdEncoding.DecodeString(pubB64)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	shared, err := curve25519.X25519(priv, pub)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return base64.StdEncoding.EncodeToString(shared)
 }

@@ -2,9 +2,9 @@ package main
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/base64"
 	"log"
 	"net/http"
 	"time"
@@ -21,14 +21,15 @@ type ActivateRequest struct {
 }
 
 type ActivateResponse struct {
-	ServiceID   string `json:"service_id"`
-	PEPAddress  string `json:"pep_address"`
-	PEPPort     int    `json:"pep_port"`
-	PEPSPI      string `json:"pep_spi"`
-	PEPDHPub    string `json:"pep_dh_pub"`
-	AEAD        string `json:"aead"`
-	SALifetime  int    `json:"sa_lifetime_seconds"`
-	ExpiresAt   string `json:"expires_at"`
+	ServiceID          string `json:"service_id"`
+	PEPAddress        string `json:"pep_address"`
+	PEPPort           int    `json:"pep_port"`
+	PEPSPI            string `json:"pep_spi"`
+	PEPDHPub          string `json:"pep_dh_pub"`
+	AEAD              string `json:"aead"`
+	SALifetime        int    `json:"sa_lifetime_seconds"`
+	ExpiresAt         string `json:"expires_at"`
+	DebugSharedSecret string `json:"debug_shared_secret"`
 }
 
 func main() {
@@ -54,17 +55,20 @@ func main() {
 			aead = req.AEADSuites[0]
 		}
 
+		pepDHPriv, pepDHPub := mustGenerateX25519()
+		sharedSecret := mustDeriveSharedSecret(pepDHPriv, req.ClientDHPub)
+
 		lifetime := 60
-		_, pepDHPub := mustGenerateX25519()
 		resp := ActivateResponse{
-			ServiceID:  req.ServiceID,
-			PEPAddress: "172.21.0.40",
-			PEPPort:    4500,
-			PEPSPI:     randomHex(4),
-			PEPDHPub:   pepDHPub,
-			AEAD:       aead,
-			SALifetime: lifetime,
-			ExpiresAt:  time.Now().Add(time.Duration(lifetime) * time.Second).UTC().Format(time.RFC3339),
+			ServiceID:          req.ServiceID,
+			PEPAddress:        "172.21.0.40",
+			PEPPort:           4500,
+			PEPSPI:            randomHex(4),
+			PEPDHPub:          pepDHPub,
+			AEAD:              aead,
+			SALifetime:        lifetime,
+			ExpiresAt:         time.Now().Add(time.Duration(lifetime) * time.Second).UTC().Format(time.RFC3339),
+			DebugSharedSecret: sharedSecret,
 		}
 
 		log.Printf("activated service=%s client=%s pep_spi=%s", req.ServiceID, req.ClientPubKey, resp.PEPSPI)
@@ -83,11 +87,6 @@ func randomHex(n int) string {
 	return "0x" + hex.EncodeToString(b)
 }
 
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
-}
-
 func mustGenerateX25519() (string, string) {
 	priv := make([]byte, 32)
 	if _, err := rand.Read(priv); err != nil {
@@ -104,4 +103,28 @@ func mustGenerateX25519() (string, string) {
 	}
 
 	return base64.StdEncoding.EncodeToString(priv), base64.StdEncoding.EncodeToString(pub)
+}
+
+func mustDeriveSharedSecret(privB64, pubB64 string) string {
+	priv, err := base64.StdEncoding.DecodeString(privB64)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	pub, err := base64.StdEncoding.DecodeString(pubB64)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	shared, err := curve25519.X25519(priv, pub)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return base64.StdEncoding.EncodeToString(shared)
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
 }
