@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -25,6 +26,7 @@ func main() {
 	defer db.Close()
 
 	initDB(db)
+	seedClients(db, "/app/clients.json")
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -69,15 +71,39 @@ func initDB(db *sql.DB) {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
 
-	_, err = db.Exec(`
-	INSERT OR IGNORE INTO clients
-	(client_pubkey, psk, allowed_services, revoked)
-	VALUES
-	('client-static-pubkey-demo', 'psk-demo', 'svc-http', 0);
-	`)
+func seedClients(db *sql.DB, path string) {
+	f, err := os.Open(path)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("no seed file found at %s: %v", path, err)
+		return
+	}
+	defer f.Close()
+
+	var clients []ClientInfo
+	if err := json.NewDecoder(f).Decode(&clients); err != nil {
+		log.Fatalf("decode seed file: %v", err)
+	}
+
+	for _, c := range clients {
+		services := strings.Join(c.AllowedServices, ",")
+		revoked := 0
+		if c.Revoked {
+			revoked = 1
+		}
+
+		_, err := db.Exec(`
+		INSERT OR REPLACE INTO clients
+		(client_pubkey, psk, allowed_services, revoked)
+		VALUES (?, ?, ?, ?);
+		`, c.ClientPubKey, c.PSK, services, revoked)
+
+		if err != nil {
+			log.Fatalf("seed client %s: %v", c.ClientPubKey, err)
+		}
+
+		log.Printf("seeded client %s", c.ClientPubKey)
 	}
 }
 

@@ -2,11 +2,15 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+
+	"golang.org/x/crypto/curve25519"
 )
 
 type ClientConfig struct {
@@ -30,6 +34,11 @@ type AccessRequest struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "gen-identity" {
+		genIdentity()
+		return
+	}
+
 	cfg := mustLoadJSON[ClientConfig]("/app/config.json")
 	id := mustLoadJSON[ClientIdentity]("/app/identity.json")
 
@@ -59,6 +68,31 @@ func main() {
 
 	pretty, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(pretty))
+}
+
+func genIdentity() {
+	priv := make([]byte, 32)
+	if _, err := rand.Read(priv); err != nil {
+		log.Fatal(err)
+	}
+
+	// X25519 scalar clamping
+	priv[0] &= 248
+	priv[31] &= 127
+	priv[31] |= 64
+
+	pub, err := curve25519.X25519(priv, curve25519.Basepoint)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	id := ClientIdentity{
+		ClientStaticPriv: base64.StdEncoding.EncodeToString(priv),
+		ClientStaticPub:  base64.StdEncoding.EncodeToString(pub),
+	}
+
+	out, _ := json.MarshalIndent(id, "", "  ")
+	fmt.Println(string(out))
 }
 
 func mustLoadJSON[T any](path string) T {

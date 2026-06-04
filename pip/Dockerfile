@@ -7,8 +7,9 @@ COPY main.go ./
 RUN go build -o pip .
 
 FROM alpine:latest
-RUN apk add --no-cache curl sqlite-libs
+RUN apk add --no-cache curl sqlite-libs sqlite
 WORKDIR /app
 COPY --from=build /app/pip /app/pip
+COPY clients.json /app/clients.json
 VOLUME ["/data"]
 CMD ["/app/pip"]
