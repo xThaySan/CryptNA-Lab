@@ -1,0 +1,6 @@
+{
+  "pdp_url": "http://cryptna-pdp:8080",
+  "pdp_static_pub": "pdp-static-pubkey-demo",
+  "service_id": "svc-http",
+  "aead_suites": ["aes-gcm-128"]
+}

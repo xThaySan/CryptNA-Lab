@@ -9,6 +9,18 @@ import (
 	"os"
 )
 
+type ClientConfig struct {
+	PDPURL       string   `json:"pdp_url"`
+	PDPStaticPub string   `json:"pdp_static_pub"`
+	ServiceID    string   `json:"service_id"`
+	AEADSuites   []string `json:"aead_suites"`
+}
+
+type ClientIdentity struct {
+	ClientStaticPub  string `json:"client_static_pub"`
+	ClientStaticPriv string `json:"client_static_priv"`
+}
+
 type AccessRequest struct {
 	ClientPubKey string   `json:"client_pubkey"`
 	ServiceID    string   `json:"service_id"`
@@ -18,14 +30,15 @@ type AccessRequest struct {
 }
 
 func main() {
-	pdpURL := getenv("PDP_URL", "http://cryptna-pdp:8080")
+	cfg := mustLoadJSON[ClientConfig]("/app/config.json")
+	id := mustLoadJSON[ClientIdentity]("/app/identity.json")
 
 	req := AccessRequest{
-		ClientPubKey: "client-static-pubkey-demo",
-		ServiceID:    "svc-http",
+		ClientPubKey: id.ClientStaticPub,
+		ServiceID:    cfg.ServiceID,
 		ClientSPI:    "0x1001",
 		ClientDHPub:  "fake-client-dh",
-		AEADSuites:   []string{"aes-gcm-128"},
+		AEADSuites:   cfg.AEADSuites,
 	}
 
 	body, err := json.Marshal(req)
@@ -33,7 +46,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	resp, err := http.Post(pdpURL+"/access", "application/json", bytes.NewReader(body))
+	resp, err := http.Post(cfg.PDPURL+"/access", "application/json", bytes.NewReader(body))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -48,9 +61,18 @@ func main() {
 	fmt.Println(string(pretty))
 }
 
-func getenv(k, fallback string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
+func mustLoadJSON[T any](path string) T {
+	var out T
+
+	f, err := os.Open(path)
+	if err != nil {
+		log.Fatalf("open %s: %v", path, err)
 	}
-	return fallback
+	defer f.Close()
+
+	if err := json.NewDecoder(f).Decode(&out); err != nil {
+		log.Fatalf("decode %s: %v", path, err)
+	}
+
+	return out
 }

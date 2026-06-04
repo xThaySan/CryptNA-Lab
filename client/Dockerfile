@@ -8,4 +8,6 @@ FROM alpine:latest
 RUN apk add --no-cache curl
 WORKDIR /app
 COPY --from=build /app/client /app/client
+COPY config.json /app/config.json
+COPY identity.json /app/identity.json
 CMD ["sleep", "infinity"]
