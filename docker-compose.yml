@@ -28,7 +28,6 @@ services:
   pep:
     build: ./pep
     container_name: cryptna-pep
-    command: sleep infinity
     networks:
       control_net:
         ipv4_address: 172.20.0.40
