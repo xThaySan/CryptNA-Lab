@@ -1,15 +1,18 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
 	"time"
-
+	"io"
 	"golang.org/x/crypto/curve25519"
+	"golang.org/x/crypto/hkdf"
 )
 
 type ActivateRequest struct {
@@ -29,7 +32,6 @@ type ActivateResponse struct {
 	AEAD              string `json:"aead"`
 	SALifetime        int    `json:"sa_lifetime_seconds"`
 	ExpiresAt         string `json:"expires_at"`
-	DebugSharedSecret string `json:"debug_shared_secret"`
 }
 
 func main() {
@@ -57,6 +59,8 @@ func main() {
 
 		pepDHPriv, pepDHPub := mustGenerateX25519()
 		sharedSecret := mustDeriveSharedSecret(pepDHPriv, req.ClientDHPub)
+		c2pKey, p2cKey := mustDeriveSessionKeys(sharedSecret)
+		log.Printf("derived session keys client=%s service=%s c2p=%s p2c=%s", req.ClientPubKey, req.ServiceID, c2pKey, p2cKey)
 
 		lifetime := 60
 		resp := ActivateResponse{
@@ -68,7 +72,6 @@ func main() {
 			AEAD:              aead,
 			SALifetime:        lifetime,
 			ExpiresAt:         time.Now().Add(time.Duration(lifetime) * time.Second).UTC().Format(time.RFC3339),
-			DebugSharedSecret: sharedSecret,
 		}
 
 		log.Printf("activated service=%s client=%s pep_spi=%s", req.ServiceID, req.ClientPubKey, resp.PEPSPI)
@@ -122,6 +125,34 @@ func mustDeriveSharedSecret(privB64, pubB64 string) string {
 	}
 
 	return base64.StdEncoding.EncodeToString(shared)
+}
+
+func mustDeriveSessionKeys(sharedB64 string) (string, string) {
+	shared, err := base64.StdEncoding.DecodeString(sharedB64)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	salt := []byte("CRYPTNA-LAB-v0")
+	info := []byte("client-pep-session-keys")
+
+	reader := hkdf.New(sha256.New, shared, salt, info)
+
+	c2p := make([]byte, 32)
+	p2c := make([]byte, 32)
+
+	if _, err := io.ReadFull(reader, c2p); err != nil {
+		log.Fatal(err)
+	}
+	if _, err := io.ReadFull(reader, p2c); err != nil {
+		log.Fatal(err)
+	}
+
+	return base64.StdEncoding.EncodeToString(c2p), base64.StdEncoding.EncodeToString(p2c)
+}
+
+func constantTimeEqual(a, b string) bool {
+	return hmac.Equal([]byte(a), []byte(b))
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

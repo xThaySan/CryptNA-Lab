@@ -38,7 +38,6 @@ type ActivateResponse struct {
 	AEAD       string `json:"aead"`
 	SALifetime int    `json:"sa_lifetime_seconds"`
 	ExpiresAt  string `json:"expires_at"`
-	DebugSharedSecret string `json:"debug_shared_secret"`
 }
 
 func main() {

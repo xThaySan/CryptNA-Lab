@@ -3,14 +3,17 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 
 	"golang.org/x/crypto/curve25519"
+	"golang.org/x/crypto/hkdf"
 )
 
 type ClientConfig struct {
@@ -40,8 +43,14 @@ type AccessResponse struct {
 }
 
 type TunnelResponse struct {
-	PEPDHPub          string `json:"pep_dh_pub"`
-	DebugSharedSecret string `json:"debug_shared_secret"`
+	ServiceID   string `json:"service_id"`
+	PEPAddress string `json:"pep_address"`
+	PEPPort    int    `json:"pep_port"`
+	PEPSPI     string `json:"pep_spi"`
+	PEPDHPub   string `json:"pep_dh_pub"`
+	AEAD       string `json:"aead"`
+	SALifetime int    `json:"sa_lifetime_seconds"`
+	ExpiresAt  string `json:"expires_at"`
 }
 
 func main() {
@@ -63,8 +72,6 @@ func main() {
 		AEADSuites:   cfg.AEADSuites,
 	}
 
-	_ = ephPriv // utilisé plus tard pour dériver la clé IPSec
-
 	body, err := json.Marshal(req)
 	if err != nil {
 		log.Fatal(err)
@@ -81,18 +88,19 @@ func main() {
 		log.Fatal(err)
 	}
 
-	clientShared := mustDeriveSharedSecret(ephPriv, out.Tunnel.PEPDHPub)
-
 	pretty, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(pretty))
-	fmt.Println("client_shared_secret:", clientShared)
-	fmt.Println("pep_shared_secret:   ", out.Tunnel.DebugSharedSecret)
 
-	if clientShared == out.Tunnel.DebugSharedSecret {
-		fmt.Println("DH OK: shared secrets match")
-	} else {
-		fmt.Println("DH ERROR: shared secrets differ")
+	if !out.Authorized {
+		os.Exit(1)
 	}
+
+	shared := mustDeriveSharedSecret(ephPriv, out.Tunnel.PEPDHPub)
+	c2p, p2c := mustDeriveSessionKeys(shared)
+
+	fmt.Println("derived client-side session keys")
+	fmt.Println("c2p:", c2p)
+	fmt.Println("p2c:", p2c)
 }
 
 func genIdentity() {
@@ -101,7 +109,6 @@ func genIdentity() {
 		log.Fatal(err)
 	}
 
-	// X25519 scalar clamping
 	priv[0] &= 248
 	priv[31] &= 127
 	priv[31] |= 64
@@ -171,4 +178,30 @@ func mustDeriveSharedSecret(privB64, pubB64 string) string {
 	}
 
 	return base64.StdEncoding.EncodeToString(shared)
+}
+
+func mustDeriveSessionKeys(sharedB64 string) (string, string) {
+	shared, err := base64.StdEncoding.DecodeString(sharedB64)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	reader := hkdf.New(
+		sha256.New,
+		shared,
+		[]byte("CRYPTNA-LAB-v0"),
+		[]byte("client-pep-session-keys"),
+	)
+
+	c2p := make([]byte, 32)
+	p2c := make([]byte, 32)
+
+	if _, err := io.ReadFull(reader, c2p); err != nil {
+		log.Fatal(err)
+	}
+	if _, err := io.ReadFull(reader, p2c); err != nil {
+		log.Fatal(err)
+	}
+
+	return base64.StdEncoding.EncodeToString(c2p), base64.StdEncoding.EncodeToString(p2c)
 }
