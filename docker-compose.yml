@@ -20,7 +20,8 @@ services:
   pip:
     build: ./pip
     container_name: cryptna-pip
-    command: sleep infinity
+    volumes:
+      - pip_data:/data
     networks:
       control_net:
         ipv4_address: 172.20.0.30
@@ -57,3 +58,6 @@ networks:
     ipam:
       config:
         - subnet: 172.22.0.0/24
+
+volumes:
+  pip_data:
