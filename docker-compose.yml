@@ -61,6 +61,18 @@ services:
     networks:
       service_net:
         ipv4_address: 172.22.0.50
+  
+  spa-send:
+    build:
+      context: .
+      dockerfile: tools/spa-send/Dockerfile
+    container_name: cryptna-spa-send
+    command: sleep infinity
+    environment:
+      <<: *debug-env
+    networks:
+      control_net:
+        ipv4_address: 172.20.0.60
 
 networks:
   control_net:
