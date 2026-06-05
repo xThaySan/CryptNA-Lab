@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"cryptna-lab/common/cryptoutil"
-	"cryptna-lab/common/protocol"
 	"cryptna-lab/common/logutil"
+	"cryptna-lab/common/protocol"
 )
 
 var (
@@ -85,6 +85,8 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 		P2CKey:       p2cKey,
 		ExpiresAt:    expiresAt,
 	}
+
+	session.XFRM = buildXFRMDryRun(session)
 
 	sessionsMu.Lock()
 	sessions[pepSPI] = session

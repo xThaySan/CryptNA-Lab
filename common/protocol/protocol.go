@@ -42,15 +42,21 @@ type ClientInfo struct {
 	Revoked         bool     `json:"revoked"`
 }
 
+type XFRMDryRun struct {
+	Mode     string   `json:"mode"`
+	Commands []string `json:"commands"`
+}
+
 type Session struct {
-	ClientPubKey string `json:"client_pubkey"`
-	ServiceID    string `json:"service_id"`
-	ClientSPI    string `json:"client_spi"`
-	PEPSPI       string `json:"pep_spi"`
-	ClientDHPub  string `json:"client_dh_pub"`
-	PEPDHPub     string `json:"pep_dh_pub"`
-	AEAD         string `json:"aead"`
-	C2PKey       string `json:"c2p_key"`
-	P2CKey       string `json:"p2c_key"`
-	ExpiresAt    string `json:"expires_at"`
+	ClientPubKey string     `json:"client_pubkey"`
+	ServiceID    string     `json:"service_id"`
+	ClientSPI    string     `json:"client_spi"`
+	PEPSPI       string     `json:"pep_spi"`
+	ClientDHPub  string     `json:"client_dh_pub"`
+	PEPDHPub     string     `json:"pep_dh_pub"`
+	AEAD         string     `json:"aead"`
+	C2PKey       string     `json:"c2p_key"`
+	P2CKey       string     `json:"p2c_key"`
+	ExpiresAt    string     `json:"expires_at"`
+	XFRM         XFRMDryRun `json:"xfrm"`
 }
