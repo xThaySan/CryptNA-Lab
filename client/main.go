@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -9,15 +8,16 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
+	"net"
 	"os"
+	"time"
 
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/hkdf"
 )
 
 type ClientConfig struct {
-	PDPURL       string   `json:"pdp_url"`
+	PDPUDPAddr   string   `json:"pdp_udp_addr"`
 	PDPStaticPub string   `json:"pdp_static_pub"`
 	ServiceID    string   `json:"service_id"`
 	AEADSuites   []string `json:"aead_suites"`
@@ -72,19 +72,38 @@ func main() {
 		AEADSuites:   cfg.AEADSuites,
 	}
 
-	body, err := json.Marshal(req)
+	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	resp, err := http.Post(cfg.PDPURL+"/access", "application/json", bytes.NewReader(body))
+	udpAddr, err := net.ResolveUDPAddr("udp", cfg.PDPUDPAddr)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer resp.Body.Close()
+
+	conn, err := net.DialUDP("udp", nil, udpAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write(reqBytes); err != nil {
+		log.Fatal(err)
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		log.Fatal(err)
+	}
+
+	buf := make([]byte, 4096)
+	n, err := conn.Read(buf)
+	if err != nil {
+		log.Fatalf("no valid response from PDP: %v", err)
+	}
 
 	var out AccessResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(buf[:n], &out); err != nil {
 		log.Fatal(err)
 	}
 

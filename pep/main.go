@@ -1,16 +1,17 @@
 package main
 
 import (
-	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
+	"sync"
 	"time"
-	"io"
+
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/hkdf"
 )
@@ -24,15 +25,33 @@ type ActivateRequest struct {
 }
 
 type ActivateResponse struct {
-	ServiceID          string `json:"service_id"`
-	PEPAddress        string `json:"pep_address"`
-	PEPPort           int    `json:"pep_port"`
-	PEPSPI            string `json:"pep_spi"`
-	PEPDHPub          string `json:"pep_dh_pub"`
-	AEAD              string `json:"aead"`
-	SALifetime        int    `json:"sa_lifetime_seconds"`
-	ExpiresAt         string `json:"expires_at"`
+	ServiceID   string `json:"service_id"`
+	PEPAddress string `json:"pep_address"`
+	PEPPort    int    `json:"pep_port"`
+	PEPSPI     string `json:"pep_spi"`
+	PEPDHPub   string `json:"pep_dh_pub"`
+	AEAD       string `json:"aead"`
+	SALifetime int    `json:"sa_lifetime_seconds"`
+	ExpiresAt  string `json:"expires_at"`
 }
+
+type Session struct {
+	ClientPubKey string `json:"client_pubkey"`
+	ServiceID    string `json:"service_id"`
+	ClientSPI    string `json:"client_spi"`
+	PEPSPI       string `json:"pep_spi"`
+	ClientDHPub  string `json:"client_dh_pub"`
+	PEPDHPub     string `json:"pep_dh_pub"`
+	AEAD         string `json:"aead"`
+	C2PKey       string `json:"c2p_key"`
+	P2CKey       string `json:"p2c_key"`
+	ExpiresAt    string `json:"expires_at"`
+}
+
+var (
+	sessionsMu sync.RWMutex
+	sessions   = map[string]Session{}
+)
 
 func main() {
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -40,46 +59,80 @@ func main() {
 		w.Write([]byte("ok\n"))
 	})
 
-	http.HandleFunc("/activate", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		var req ActivateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid json", http.StatusBadRequest)
-			return
-		}
-
-		aead := "aes-gcm-128"
-		if len(req.AEADSuites) > 0 {
-			aead = req.AEADSuites[0]
-		}
-
-		pepDHPriv, pepDHPub := mustGenerateX25519()
-		sharedSecret := mustDeriveSharedSecret(pepDHPriv, req.ClientDHPub)
-		c2pKey, p2cKey := mustDeriveSessionKeys(sharedSecret)
-		log.Printf("derived session keys client=%s service=%s c2p=%s p2c=%s", req.ClientPubKey, req.ServiceID, c2pKey, p2cKey)
-
-		lifetime := 60
-		resp := ActivateResponse{
-			ServiceID:          req.ServiceID,
-			PEPAddress:        "172.21.0.40",
-			PEPPort:           4500,
-			PEPSPI:            randomHex(4),
-			PEPDHPub:          pepDHPub,
-			AEAD:              aead,
-			SALifetime:        lifetime,
-			ExpiresAt:         time.Now().Add(time.Duration(lifetime) * time.Second).UTC().Format(time.RFC3339),
-		}
-
-		log.Printf("activated service=%s client=%s pep_spi=%s", req.ServiceID, req.ClientPubKey, resp.PEPSPI)
-		writeJSON(w, resp)
-	})
+	http.HandleFunc("/activate", activateHandler)
+	http.HandleFunc("/sessions", sessionsHandler)
 
 	log.Println("PEP listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func activateHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req ActivateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	aead := "aes-gcm-128"
+	if len(req.AEADSuites) > 0 {
+		aead = req.AEADSuites[0]
+	}
+
+	pepDHPriv, pepDHPub := mustGenerateX25519()
+	sharedSecret := mustDeriveSharedSecret(pepDHPriv, req.ClientDHPub)
+	c2pKey, p2cKey := mustDeriveSessionKeys(sharedSecret)
+
+	lifetime := 60
+	expiresAt := time.Now().Add(time.Duration(lifetime) * time.Second).UTC().Format(time.RFC3339)
+	pepSPI := randomHex(4)
+
+	session := Session{
+		ClientPubKey: req.ClientPubKey,
+		ServiceID:    req.ServiceID,
+		ClientSPI:    req.ClientSPI,
+		PEPSPI:       pepSPI,
+		ClientDHPub:  req.ClientDHPub,
+		PEPDHPub:     pepDHPub,
+		AEAD:         aead,
+		C2PKey:       c2pKey,
+		P2CKey:       p2cKey,
+		ExpiresAt:    expiresAt,
+	}
+
+	sessionsMu.Lock()
+	sessions[pepSPI] = session
+	sessionsMu.Unlock()
+
+	resp := ActivateResponse{
+		ServiceID:   req.ServiceID,
+		PEPAddress: "172.21.0.40",
+		PEPPort:    4500,
+		PEPSPI:     pepSPI,
+		PEPDHPub:   pepDHPub,
+		AEAD:       aead,
+		SALifetime: lifetime,
+		ExpiresAt:  expiresAt,
+	}
+
+	log.Printf("activated service=%s client=%s pep_spi=%s", req.ServiceID, req.ClientPubKey, pepSPI)
+	writeJSON(w, resp)
+}
+
+func sessionsHandler(w http.ResponseWriter, r *http.Request) {
+	sessionsMu.RLock()
+	defer sessionsMu.RUnlock()
+
+	out := make([]Session, 0, len(sessions))
+	for _, s := range sessions {
+		out = append(out, s)
+	}
+
+	writeJSON(w, out)
 }
 
 func randomHex(n int) string {
@@ -133,10 +186,12 @@ func mustDeriveSessionKeys(sharedB64 string) (string, string) {
 		log.Fatal(err)
 	}
 
-	salt := []byte("CRYPTNA-LAB-v0")
-	info := []byte("client-pep-session-keys")
-
-	reader := hkdf.New(sha256.New, shared, salt, info)
+	reader := hkdf.New(
+		sha256.New,
+		shared,
+		[]byte("CRYPTNA-LAB-v0"),
+		[]byte("client-pep-session-keys"),
+	)
 
 	c2p := make([]byte, 32)
 	p2c := make([]byte, 32)
@@ -149,10 +204,6 @@ func mustDeriveSessionKeys(sharedB64 string) (string, string) {
 	}
 
 	return base64.StdEncoding.EncodeToString(c2p), base64.StdEncoding.EncodeToString(p2c)
-}
-
-func constantTimeEqual(a, b string) bool {
-	return hmac.Equal([]byte(a), []byte(b))
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

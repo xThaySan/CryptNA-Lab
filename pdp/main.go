@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
 	"os"
 )
@@ -44,55 +45,92 @@ func main() {
 	pipURL := getenv("PIP_URL", "http://cryptna-pip:8080")
 	pepURL := getenv("PEP_URL", "http://cryptna-pep:8080")
 
+	go startHealthServer()
+
+	addr, err := net.ResolveUDPAddr("udp", ":4000")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	conn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+
+	log.Println("PDP UDP SPA listener on :4000")
+
+	buf := make([]byte, 4096)
+	for {
+		n, remote, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			log.Println("udp read:", err)
+			continue
+		}
+
+		packet := make([]byte, n)
+		copy(packet, buf[:n])
+
+		go handleUDPPacket(conn, remote, packet, pipURL, pepURL)
+	}
+}
+
+func startHealthServer() {
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok\n"))
 	})
 
-	http.HandleFunc("/access", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		var req AccessRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid json", http.StatusBadRequest)
-			return
-		}
-
-		client, err := fetchClient(pipURL, req.ClientPubKey)
-		if err != nil {
-			writeJSON(w, AccessResponse{Authorized: false, Reason: "client not found or PIP error"})
-			return
-		}
-
-		if client.Revoked {
-			writeJSON(w, AccessResponse{Authorized: false, Reason: "client revoked"})
-			return
-		}
-
-		if !contains(client.AllowedServices, req.ServiceID) {
-			writeJSON(w, AccessResponse{Authorized: false, Reason: "service not allowed"})
-			return
-		}
-
-		tunnel, err := activatePEP(pepURL, req)
-		if err != nil {
-			log.Println("activate PEP:", err)
-			writeJSON(w, AccessResponse{Authorized: false, Reason: "PEP activation failed"})
-			return
-		}
-
-		writeJSON(w, AccessResponse{
-			Authorized: true,
-			Reason:     "authorized",
-			Tunnel:     &tunnel,
-		})
-	})
-
-	log.Println("PDP listening on :8080")
+	log.Println("PDP health server on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func handleUDPPacket(conn *net.UDPConn, remote *net.UDPAddr, packet []byte, pipURL, pepURL string) {
+	var req AccessRequest
+	if err := json.Unmarshal(packet, &req); err != nil {
+		log.Println("drop: invalid json")
+		return // silence on invalid SPA
+	}
+
+	log.Printf("UDP SPA from=%s client=%s service=%s", remote.String(), req.ClientPubKey, req.ServiceID)
+
+	client, err := fetchClient(pipURL, req.ClientPubKey)
+	if err != nil {
+		log.Println("drop: unknown client or PIP error:", err)
+		return // silence on unknown client
+	}
+
+	if client.Revoked {
+		log.Println("drop: revoked client")
+		return
+	}
+
+	if !contains(client.AllowedServices, req.ServiceID) {
+		log.Println("drop: service not allowed")
+		return
+	}
+
+	tunnel, err := activatePEP(pepURL, req)
+	if err != nil {
+		log.Println("activate PEP:", err)
+		return
+	}
+
+	resp := AccessResponse{
+		Authorized: true,
+		Reason:     "authorized",
+		Tunnel:     &tunnel,
+	}
+
+	out, err := json.Marshal(resp)
+	if err != nil {
+		log.Println("marshal response:", err)
+		return
+	}
+
+	if _, err := conn.WriteToUDP(out, remote); err != nil {
+		log.Println("udp write:", err)
+	}
 }
 
 func fetchClient(pipURL, pubkey string) (ClientInfo, error) {
@@ -140,11 +178,6 @@ func contains(xs []string, x string) bool {
 		}
 	}
 	return false
-}
-
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
 }
 
 func getenv(k, fallback string) string {
