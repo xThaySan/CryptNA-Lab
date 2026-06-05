@@ -1,8 +1,10 @@
 [
   {
     "client_pubkey": "H6mOCNwtQ51a9kqBy3hY57/R5xF4xN4mNzbUYDsX2Q4=",
-    "psk": "psk-demo",
-    "allowed_services": ["svc-http"],
+    "psk": "w6MDoL5vStSomTFxJX9vMymG5vTASo3sKbi98GIF1ek=",
+    "allowed_services": [
+      "svc-http"
+    ],
     "revoked": false
   }
 ]

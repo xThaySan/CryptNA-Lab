@@ -1,6 +1,11 @@
+x-debug-env: &debug-env
+  CRYPTNA_DEBUG: ${CRYPTNA_DEBUG:-0}
+
 services:
   client:
-    build: ./client
+    build:
+      context: .
+      dockerfile: client/Dockerfile
     container_name: cryptna-client
     command: sleep infinity
     networks:
@@ -8,25 +13,37 @@ services:
         ipv4_address: 172.20.0.10
       data_net:
         ipv4_address: 172.21.0.10
+    environment:
+      <<: *debug-env
 
   pdp:
-    build: ./pdp
+    build:
+      context: .
+      dockerfile: pdp/Dockerfile
     container_name: cryptna-pdp
     networks:
       control_net:
         ipv4_address: 172.20.0.20
+    environment:
+      <<: *debug-env
 
   pip:
-    build: ./pip
+    build:
+      context: .
+      dockerfile: pip/Dockerfile
     container_name: cryptna-pip
     volumes:
       - pip_data:/data
     networks:
       control_net:
         ipv4_address: 172.20.0.30
+    environment:
+      <<: *debug-env
 
   pep:
-    build: ./pep
+    build:
+      context: .
+      dockerfile: pep/Dockerfile
     container_name: cryptna-pep
     networks:
       control_net:
@@ -35,6 +52,8 @@ services:
         ipv4_address: 172.21.0.40
       service_net:
         ipv4_address: 172.22.0.40
+    environment:
+      <<: *debug-env
 
   service-http:
     image: nginx:alpine

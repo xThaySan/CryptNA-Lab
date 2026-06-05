@@ -1,11 +1,28 @@
 FROM golang:1.23-alpine AS build
-WORKDIR /app
-COPY go.mod ./
-COPY main.go ./
+WORKDIR /src
+
+COPY common/noiseutil ./common/noiseutil
+COPY common/protocol ./common/protocol
+COPY common/logutil ./common/logutil
+COPY pdp ./pdp
+
+RUN cat > go.work <<'WORK'
+go 1.23
+
+use (
+	./pdp
+	./common/noiseutil
+	./common/protocol
+)
+WORK
+
+WORKDIR /src/pdp
+RUN go mod download
 RUN go build -o pdp .
 
 FROM alpine:latest
 RUN apk add --no-cache curl
 WORKDIR /app
-COPY --from=build /app/pdp /app/pdp
+COPY --from=build /src/pdp/pdp /app/pdp
+COPY pdp/identity.json /app/identity.json
 CMD ["/app/pdp"]

@@ -2,55 +2,21 @@ package main
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/curve25519"
-	"golang.org/x/crypto/hkdf"
+	"cryptna-lab/common/cryptoutil"
+	"cryptna-lab/common/protocol"
+	"cryptna-lab/common/logutil"
 )
-
-type ActivateRequest struct {
-	ClientPubKey string   `json:"client_pubkey"`
-	ServiceID    string   `json:"service_id"`
-	ClientSPI    string   `json:"client_spi"`
-	ClientDHPub  string   `json:"client_dh_pub"`
-	AEADSuites   []string `json:"aead_suites"`
-}
-
-type ActivateResponse struct {
-	ServiceID   string `json:"service_id"`
-	PEPAddress string `json:"pep_address"`
-	PEPPort    int    `json:"pep_port"`
-	PEPSPI     string `json:"pep_spi"`
-	PEPDHPub   string `json:"pep_dh_pub"`
-	AEAD       string `json:"aead"`
-	SALifetime int    `json:"sa_lifetime_seconds"`
-	ExpiresAt  string `json:"expires_at"`
-}
-
-type Session struct {
-	ClientPubKey string `json:"client_pubkey"`
-	ServiceID    string `json:"service_id"`
-	ClientSPI    string `json:"client_spi"`
-	PEPSPI       string `json:"pep_spi"`
-	ClientDHPub  string `json:"client_dh_pub"`
-	PEPDHPub     string `json:"pep_dh_pub"`
-	AEAD         string `json:"aead"`
-	C2PKey       string `json:"c2p_key"`
-	P2CKey       string `json:"p2c_key"`
-	ExpiresAt    string `json:"expires_at"`
-}
 
 var (
 	sessionsMu sync.RWMutex
-	sessions   = map[string]Session{}
+	sessions   = map[string]protocol.Session{}
 )
 
 func main() {
@@ -62,7 +28,7 @@ func main() {
 	http.HandleFunc("/activate", activateHandler)
 	http.HandleFunc("/sessions", sessionsHandler)
 
-	log.Println("PEP listening on :8080")
+	logutil.Infof("pep", "listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
@@ -72,32 +38,48 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req ActivateRequest
+	var req protocol.ActivateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+	logutil.Debugf("pep", "activation request client=%s service=%s client_spi=%s client_dh_pub=%s aead=%v", logutil.Short(req.ClientPubKey), req.ServiceID, req.ClientSPI, logutil.Short(req.ClientDHPub), req.AEADSuites)
 
 	aead := "aes-gcm-128"
 	if len(req.AEADSuites) > 0 {
 		aead = req.AEADSuites[0]
 	}
 
-	pepDHPriv, pepDHPub := mustGenerateX25519()
-	sharedSecret := mustDeriveSharedSecret(pepDHPriv, req.ClientDHPub)
-	c2pKey, p2cKey := mustDeriveSessionKeys(sharedSecret)
+	pepDH, err := cryptoutil.GenerateX25519KeyPair()
+	if err != nil {
+		http.Error(w, "dh generation failed", http.StatusInternalServerError)
+		return
+	}
+	logutil.Debugf("pep", "generated pep dh pub=%s", logutil.Short(pepDH.PublicB64))
+
+	sharedSecret, err := cryptoutil.DeriveSharedSecretB64(pepDH.PrivateB64, req.ClientDHPub)
+	if err != nil {
+		http.Error(w, "dh derivation failed", http.StatusBadRequest)
+		return
+	}
+	c2pKey, p2cKey, err := cryptoutil.DeriveSessionKeys(sharedSecret)
+	if err != nil {
+		http.Error(w, "kdf failed", http.StatusInternalServerError)
+		return
+	}
+	logutil.Debugf("pep", "derived session keys c2p=%s p2c=%s", logutil.Short(c2pKey), logutil.Short(p2cKey))
 
 	lifetime := 60
 	expiresAt := time.Now().Add(time.Duration(lifetime) * time.Second).UTC().Format(time.RFC3339)
 	pepSPI := randomHex(4)
 
-	session := Session{
+	session := protocol.Session{
 		ClientPubKey: req.ClientPubKey,
 		ServiceID:    req.ServiceID,
 		ClientSPI:    req.ClientSPI,
 		PEPSPI:       pepSPI,
 		ClientDHPub:  req.ClientDHPub,
-		PEPDHPub:     pepDHPub,
+		PEPDHPub:     pepDH.PublicB64,
 		AEAD:         aead,
 		C2PKey:       c2pKey,
 		P2CKey:       p2cKey,
@@ -106,20 +88,21 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 
 	sessionsMu.Lock()
 	sessions[pepSPI] = session
+	logutil.Debugf("pep", "stored session pep_spi=%s expires_at=%s sessions_count=%d", pepSPI, expiresAt, len(sessions))
 	sessionsMu.Unlock()
 
-	resp := ActivateResponse{
-		ServiceID:   req.ServiceID,
+	resp := protocol.TunnelParams{
+		ServiceID:  req.ServiceID,
 		PEPAddress: "172.21.0.40",
 		PEPPort:    4500,
 		PEPSPI:     pepSPI,
-		PEPDHPub:   pepDHPub,
+		PEPDHPub:   pepDH.PublicB64,
 		AEAD:       aead,
 		SALifetime: lifetime,
 		ExpiresAt:  expiresAt,
 	}
 
-	log.Printf("activated service=%s client=%s pep_spi=%s", req.ServiceID, req.ClientPubKey, pepSPI)
+	logutil.Infof("pep", "activated service=%s client=%s pep_spi=%s", req.ServiceID, logutil.Short(req.ClientPubKey), pepSPI)
 	writeJSON(w, resp)
 }
 
@@ -127,11 +110,10 @@ func sessionsHandler(w http.ResponseWriter, r *http.Request) {
 	sessionsMu.RLock()
 	defer sessionsMu.RUnlock()
 
-	out := make([]Session, 0, len(sessions))
+	out := make([]protocol.Session, 0, len(sessions))
 	for _, s := range sessions {
 		out = append(out, s)
 	}
-
 	writeJSON(w, out)
 }
 
@@ -141,69 +123,6 @@ func randomHex(n int) string {
 		panic(err)
 	}
 	return "0x" + hex.EncodeToString(b)
-}
-
-func mustGenerateX25519() (string, string) {
-	priv := make([]byte, 32)
-	if _, err := rand.Read(priv); err != nil {
-		log.Fatal(err)
-	}
-
-	priv[0] &= 248
-	priv[31] &= 127
-	priv[31] |= 64
-
-	pub, err := curve25519.X25519(priv, curve25519.Basepoint)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	return base64.StdEncoding.EncodeToString(priv), base64.StdEncoding.EncodeToString(pub)
-}
-
-func mustDeriveSharedSecret(privB64, pubB64 string) string {
-	priv, err := base64.StdEncoding.DecodeString(privB64)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	pub, err := base64.StdEncoding.DecodeString(pubB64)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	shared, err := curve25519.X25519(priv, pub)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	return base64.StdEncoding.EncodeToString(shared)
-}
-
-func mustDeriveSessionKeys(sharedB64 string) (string, string) {
-	shared, err := base64.StdEncoding.DecodeString(sharedB64)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	reader := hkdf.New(
-		sha256.New,
-		shared,
-		[]byte("CRYPTNA-LAB-v0"),
-		[]byte("client-pep-session-keys"),
-	)
-
-	c2p := make([]byte, 32)
-	p2c := make([]byte, 32)
-
-	if _, err := io.ReadFull(reader, c2p); err != nil {
-		log.Fatal(err)
-	}
-	if _, err := io.ReadFull(reader, p2c); err != nil {
-		log.Fatal(err)
-	}
-
-	return base64.StdEncoding.EncodeToString(c2p), base64.StdEncoding.EncodeToString(p2c)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

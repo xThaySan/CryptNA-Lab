@@ -1,19 +1,17 @@
 package main
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"os"
 	"time"
 
-	"golang.org/x/crypto/curve25519"
-	"golang.org/x/crypto/hkdf"
+	"cryptna-lab/common/cryptoutil"
+	"cryptna-lab/common/noiseutil"
+	"cryptna-lab/common/protocol"
+	"cryptna-lab/common/logutil"
 )
 
 type ClientConfig struct {
@@ -23,35 +21,7 @@ type ClientConfig struct {
 	AEADSuites   []string `json:"aead_suites"`
 }
 
-type ClientIdentity struct {
-	ClientStaticPub  string `json:"client_static_pub"`
-	ClientStaticPriv string `json:"client_static_priv"`
-}
-
-type AccessRequest struct {
-	ClientPubKey string   `json:"client_pubkey"`
-	ServiceID    string   `json:"service_id"`
-	ClientSPI    string   `json:"client_spi"`
-	ClientDHPub  string   `json:"client_dh_pub"`
-	AEADSuites   []string `json:"aead_suites"`
-}
-
-type AccessResponse struct {
-	Authorized bool           `json:"authorized"`
-	Reason     string         `json:"reason"`
-	Tunnel     TunnelResponse `json:"tunnel"`
-}
-
-type TunnelResponse struct {
-	ServiceID   string `json:"service_id"`
-	PEPAddress string `json:"pep_address"`
-	PEPPort    int    `json:"pep_port"`
-	PEPSPI     string `json:"pep_spi"`
-	PEPDHPub   string `json:"pep_dh_pub"`
-	AEAD       string `json:"aead"`
-	SALifetime int    `json:"sa_lifetime_seconds"`
-	ExpiresAt  string `json:"expires_at"`
-}
+type ClientIdentity = noiseutil.ClientIdentity
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "gen-identity" {
@@ -62,21 +32,34 @@ func main() {
 	cfg := mustLoadJSON[ClientConfig]("/app/config.json")
 	id := mustLoadJSON[ClientIdentity]("/app/identity.json")
 
-	ephPriv, ephPub := mustGenerateX25519()
+	logutil.Debugf("client", "loaded config pdp_udp_addr=%s service_id=%s", cfg.PDPUDPAddr, cfg.ServiceID)
+	logutil.Debugf("client", "loaded identity client_pub=%s", logutil.Short(id.ClientStaticPub))
 
-	req := AccessRequest{
-		ClientPubKey: id.ClientStaticPub,
-		ServiceID:    cfg.ServiceID,
-		ClientSPI:    "0x1001",
-		ClientDHPub:  ephPub,
-		AEADSuites:   cfg.AEADSuites,
+	eph, err := cryptoutil.GenerateX25519KeyPair()
+	if err != nil {
+		log.Fatal(err)
 	}
+	logutil.Debugf("client", "generated ephemeral dh pub=%s", logutil.Short(eph.PublicB64))
 
-	reqBytes, err := json.Marshal(req)
+	payload := protocol.AccessPayload{
+		ServiceID:   cfg.ServiceID,
+		ClientSPI:   "0x1001",
+		ClientDHPub: eph.PublicB64,
+		AEADSuites:  cfg.AEADSuites,
+	}
+	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	spa, err := noiseutil.BuildIKpsk1SPA(id, cfg.PDPStaticPub, payloadBytes, time.Now().UTC())
+	if err != nil {
+		log.Fatal(err)
+	}
+	logutil.Debugf("client", "built SPA packet size=%d hash=%s timestamp_ms=%d", len(spa.Packet), spa.PacketHash, spa.TimestampMS)
+
+	// Send SPA via UDP
+	logutil.Debugf("client", "sending SPA to %s", cfg.PDPUDPAddr)
 	udpAddr, err := net.ResolveUDPAddr("udp", cfg.PDPUDPAddr)
 	if err != nil {
 		log.Fatal(err)
@@ -88,7 +71,7 @@ func main() {
 	}
 	defer conn.Close()
 
-	if _, err := conn.Write(reqBytes); err != nil {
+	if _, err := conn.Write(spa.Packet); err != nil {
 		log.Fatal(err)
 	}
 
@@ -101,45 +84,52 @@ func main() {
 	if err != nil {
 		log.Fatalf("no valid response from PDP: %v", err)
 	}
+	logutil.Debugf("client", "received encrypted response size=%d", n)
 
-	var out AccessResponse
-	if err := json.Unmarshal(buf[:n], &out); err != nil {
+	plainResp, err := noiseutil.DecryptResponse(spa.ResponseKey, buf[:n])
+	if err != nil {
+		log.Fatalf("invalid encrypted PDP response: %v", err)
+	}
+	logutil.Debugf("client", "decrypted PDP response size=%d", len(plainResp))
+
+	var out protocol.AccessResponse
+	if err := json.Unmarshal(plainResp, &out); err != nil {
 		log.Fatal(err)
 	}
 
 	pretty, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(pretty))
+	fmt.Println("spa_packet_hash:", spa.PacketHash)
 
-	if !out.Authorized {
+	if !out.Authorized || out.Tunnel == nil {
 		os.Exit(1)
 	}
 
-	shared := mustDeriveSharedSecret(ephPriv, out.Tunnel.PEPDHPub)
-	c2p, p2c := mustDeriveSessionKeys(shared)
-
-	fmt.Println("derived client-side session keys")
-	fmt.Println("c2p:", c2p)
-	fmt.Println("p2c:", p2c)
+	shared, err := cryptoutil.DeriveSharedSecretB64(eph.PrivateB64, out.Tunnel.PEPDHPub)
+	if err != nil {
+		log.Fatal(err)
+	}
+	c2p, p2c, err := cryptoutil.DeriveSessionKeys(shared)
+	if err != nil {
+		log.Fatal(err)
+	}
+	logutil.Debugf("client", "derived session keys c2p=%s p2c=%s", logutil.Short(c2p), logutil.Short(p2c))
 }
 
 func genIdentity() {
-	priv := make([]byte, 32)
-	if _, err := rand.Read(priv); err != nil {
+	priv, pub, err := noiseutil.GenerateStaticKeypair()
+	if err != nil {
 		log.Fatal(err)
 	}
-
-	priv[0] &= 248
-	priv[31] &= 127
-	priv[31] |= 64
-
-	pub, err := curve25519.X25519(priv, curve25519.Basepoint)
+	psk, err := noiseutil.GeneratePSK()
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	id := ClientIdentity{
-		ClientStaticPriv: base64.StdEncoding.EncodeToString(priv),
-		ClientStaticPub:  base64.StdEncoding.EncodeToString(pub),
+		ClientStaticPriv: priv,
+		ClientStaticPub:  pub,
+		SPAPSK:           psk,
 	}
 
 	out, _ := json.MarshalIndent(id, "", "  ")
@@ -148,79 +138,13 @@ func genIdentity() {
 
 func mustLoadJSON[T any](path string) T {
 	var out T
-
 	f, err := os.Open(path)
 	if err != nil {
 		log.Fatalf("open %s: %v", path, err)
 	}
 	defer f.Close()
-
 	if err := json.NewDecoder(f).Decode(&out); err != nil {
 		log.Fatalf("decode %s: %v", path, err)
 	}
-
 	return out
-}
-
-func mustGenerateX25519() (string, string) {
-	priv := make([]byte, 32)
-	if _, err := rand.Read(priv); err != nil {
-		log.Fatal(err)
-	}
-
-	priv[0] &= 248
-	priv[31] &= 127
-	priv[31] |= 64
-
-	pub, err := curve25519.X25519(priv, curve25519.Basepoint)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	return base64.StdEncoding.EncodeToString(priv), base64.StdEncoding.EncodeToString(pub)
-}
-
-func mustDeriveSharedSecret(privB64, pubB64 string) string {
-	priv, err := base64.StdEncoding.DecodeString(privB64)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	pub, err := base64.StdEncoding.DecodeString(pubB64)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	shared, err := curve25519.X25519(priv, pub)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	return base64.StdEncoding.EncodeToString(shared)
-}
-
-func mustDeriveSessionKeys(sharedB64 string) (string, string) {
-	shared, err := base64.StdEncoding.DecodeString(sharedB64)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	reader := hkdf.New(
-		sha256.New,
-		shared,
-		[]byte("CRYPTNA-LAB-v0"),
-		[]byte("client-pep-session-keys"),
-	)
-
-	c2p := make([]byte, 32)
-	p2c := make([]byte, 32)
-
-	if _, err := io.ReadFull(reader, c2p); err != nil {
-		log.Fatal(err)
-	}
-	if _, err := io.ReadFull(reader, p2c); err != nil {
-		log.Fatal(err)
-	}
-
-	return base64.StdEncoding.EncodeToString(c2p), base64.StdEncoding.EncodeToString(p2c)
 }

@@ -7,47 +7,59 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
+	"time"
+
+	"cryptna-lab/common/noiseutil"
+	"cryptna-lab/common/protocol"
+	"cryptna-lab/common/logutil"
 )
 
-type AccessRequest struct {
-	ClientPubKey string   `json:"client_pubkey"`
-	ServiceID    string   `json:"service_id"`
-	ClientSPI    string   `json:"client_spi"`
-	ClientDHPub  string   `json:"client_dh_pub"`
-	AEADSuites   []string `json:"aead_suites"`
+const (
+	spaListenAddr = ":4000"
+	replayTTL     = 10 * time.Second
+	spaSkew       = 10 * time.Second
+)
+
+type replayCache struct {
+	mu    sync.Mutex
+	items map[string]time.Time
 }
 
-type ClientInfo struct {
-	ClientPubKey     string   `json:"client_pubkey"`
-	PSK             string   `json:"psk"`
-	AllowedServices []string `json:"allowed_services"`
-	Revoked         bool     `json:"revoked"`
+func newReplayCache() *replayCache {
+	return &replayCache{items: map[string]time.Time{}}
 }
 
-type AccessResponse struct {
-	Authorized bool             `json:"authorized"`
-	Reason     string           `json:"reason"`
-	Tunnel     *ActivateResponse `json:"tunnel,omitempty"`
+func (c *replayCache) Seen(hash string, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k, exp := range c.items {
+		if now.After(exp) {
+			delete(c.items, k)
+		}
+	}
+	_, ok := c.items[hash]
+	return ok
 }
 
-type ActivateResponse struct {
-	ServiceID   string `json:"service_id"`
-	PEPAddress string `json:"pep_address"`
-	PEPPort    int    `json:"pep_port"`
-	PEPSPI     string `json:"pep_spi"`
-	PEPDHPub   string `json:"pep_dh_pub"`
-	AEAD       string `json:"aead"`
-	SALifetime int    `json:"sa_lifetime_seconds"`
-	ExpiresAt  string `json:"expires_at"`
+func (c *replayCache) Add(hash string, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items[hash] = now.Add(replayTTL)
 }
 
 func main() {
 	pipURL := getenv("PIP_URL", "http://cryptna-pip:8080")
 	pepURL := getenv("PEP_URL", "http://cryptna-pep:8080")
+	identityPath := getenv("PDP_IDENTITY", "/app/identity.json")
+	pdpID := mustLoadJSON[noiseutil.PDPIdentity](identityPath)
+	replays := newReplayCache()
+
+	logutil.Debugf("pdp", "debug enabled replay_ttl=%s spa_skew=%s", replayTTL, spaSkew)
 
 	go startHealthServer()
 
-	addr, err := net.ResolveUDPAddr("udp", ":4000")
+	addr, err := net.ResolveUDPAddr("udp", spaListenAddr)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -57,21 +69,18 @@ func main() {
 		log.Fatal(err)
 	}
 	defer conn.Close()
+	logutil.Infof("pdp", "UDP Noise SPA listener on %s", spaListenAddr)
 
-	log.Println("PDP UDP SPA listener on :4000")
-
-	buf := make([]byte, 4096)
+	buf := make([]byte, 2048)
 	for {
 		n, remote, err := conn.ReadFromUDP(buf)
 		if err != nil {
 			log.Println("udp read:", err)
 			continue
 		}
-
 		packet := make([]byte, n)
 		copy(packet, buf[:n])
-
-		go handleUDPPacket(conn, remote, packet, pipURL, pepURL)
+		go handleUDPPacket(conn, remote, packet, pipURL, pepURL, pdpID, replays)
 	}
 }
 
@@ -80,93 +89,105 @@ func startHealthServer() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok\n"))
 	})
-
-	log.Println("PDP health server on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func handleUDPPacket(conn *net.UDPConn, remote *net.UDPAddr, packet []byte, pipURL, pepURL string) {
-	var req AccessRequest
-	if err := json.Unmarshal(packet, &req); err != nil {
-		log.Println("drop: invalid json")
-		return // silence on invalid SPA
+func handleUDPPacket(conn *net.UDPConn, remote *net.UDPAddr, packet []byte, pipURL, pepURL string, pdpID noiseutil.PDPIdentity, replays *replayCache) {
+	now := time.Now().UTC()
+	packetHash := noiseutil.PacketHash(packet)
+	logutil.Debugf("pdp", "udp packet from=%s size=%d hash=%s", remote.String(), len(packet), packetHash)
+	
+	if replays.Seen(packetHash, now) {
+		logutil.Debugf("pdp", "drop replay hash=%s", packetHash)
+		return
 	}
 
-	log.Printf("UDP SPA from=%s client=%s service=%s", remote.String(), req.ClientPubKey, req.ServiceID)
-
-	client, err := fetchClient(pipURL, req.ClientPubKey)
+	opened, err := noiseutil.OpenIKpsk1SPA(packet, pdpID, now, spaSkew)
 	if err != nil {
-		log.Println("drop: unknown client or PIP error:", err)
-		return // silence on unknown client
+		logutil.Debugf("pdp", "drop invalid SPA from=%s err=%v", remote.String(), err)
+		return
 	}
+	logutil.Debugf("pdp", "SPA opened client=%s timestamp_ms=%d payload_size=%d hash=%s", logutil.Short(opened.ClientStaticPub), opened.TimestampMS, len(opened.Payload), opened.PacketHash)
+	replays.Add(opened.PacketHash, now)
 
-	if client.Revoked {
-		log.Println("drop: revoked client")
+	var payload protocol.AccessPayload
+	if err := json.Unmarshal(opened.Payload, &payload); err != nil {
+		return
+	}
+	logutil.Debugf("pdp", "access payload service=%s client_spi=%s client_dh_pub=%s aead=%v", payload.ServiceID, payload.ClientSPI, logutil.Short(payload.ClientDHPub), payload.AEADSuites)
+
+	logutil.Debugf("pdp", "query PIP client=%s", logutil.Short(opened.ClientStaticPub))
+	client, err := fetchClient(pipURL, opened.ClientStaticPub)
+	if err != nil || client.Revoked || !contains(client.AllowedServices, payload.ServiceID) {
+		logutil.Debugf("pdp", "drop unauthorized client=%s service=%s err=%v revoked=%v", logutil.Short(opened.ClientStaticPub), payload.ServiceID, err, client.Revoked)
 		return
 	}
 
-	if !contains(client.AllowedServices, req.ServiceID) {
-		log.Println("drop: service not allowed")
-		return
-	}
-
-	tunnel, err := activatePEP(pepURL, req)
+	logutil.Debugf("pdp", "activate PEP client=%s service=%s", logutil.Short(opened.ClientStaticPub), payload.ServiceID)
+	tunnel, err := activatePEP(pepURL, protocol.ActivateRequest{
+		ClientPubKey: opened.ClientStaticPub,
+		ServiceID:    payload.ServiceID,
+		ClientSPI:    payload.ClientSPI,
+		ClientDHPub:  payload.ClientDHPub,
+		AEADSuites:   payload.AEADSuites,
+	})
 	if err != nil {
 		log.Println("activate PEP:", err)
 		return
 	}
+	logutil.Debugf("pdp", "PEP activated pep_spi=%s pep_dh_pub=%s expires_at=%s", tunnel.PEPSPI, logutil.Short(tunnel.PEPDHPub), tunnel.ExpiresAt)
 
-	resp := AccessResponse{
+	resp := protocol.AccessResponse{
 		Authorized: true,
 		Reason:     "authorized",
 		Tunnel:     &tunnel,
 	}
-
-	out, err := json.Marshal(resp)
+	plainResp, err := json.Marshal(resp)
 	if err != nil {
 		log.Println("marshal response:", err)
 		return
 	}
 
-	if _, err := conn.WriteToUDP(out, remote); err != nil {
+	cipherResp, err := noiseutil.EncryptResponse(opened.ResponseKey, plainResp)
+	if err != nil {
+		log.Println("encrypt response:", err)
+		return
+	}
+
+	logutil.Debugf("pdp", "sending encrypted response to=%s size=%d", remote.String(), len(cipherResp))
+	if _, err := conn.WriteToUDP(cipherResp, remote); err != nil {
 		log.Println("udp write:", err)
 	}
 }
 
-func fetchClient(pipURL, pubkey string) (ClientInfo, error) {
-	var c ClientInfo
+func fetchClient(pipURL, pubkey string) (protocol.ClientInfo, error) {
+	var c protocol.ClientInfo
 	resp, err := http.Get(pipURL + "/clients/" + pubkey)
 	if err != nil {
 		return c, err
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return c, http.ErrNoLocation
 	}
-
 	err = json.NewDecoder(resp.Body).Decode(&c)
 	return c, err
 }
 
-func activatePEP(pepURL string, req AccessRequest) (ActivateResponse, error) {
-	var out ActivateResponse
-
+func activatePEP(pepURL string, req protocol.ActivateRequest) (protocol.TunnelParams, error) {
+	var out protocol.TunnelParams
 	body, err := json.Marshal(req)
 	if err != nil {
 		return out, err
 	}
-
 	resp, err := http.Post(pepURL+"/activate", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return out, err
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return out, http.ErrNoLocation
 	}
-
 	err = json.NewDecoder(resp.Body).Decode(&out)
 	return out, err
 }
@@ -185,4 +206,17 @@ func getenv(k, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func mustLoadJSON[T any](path string) T {
+	var out T
+	f, err := os.Open(path)
+	if err != nil {
+		log.Fatalf("open %s: %v", path, err)
+	}
+	defer f.Close()
+	if err := json.NewDecoder(f).Decode(&out); err != nil {
+		log.Fatalf("decode %s: %v", path, err)
+	}
+	return out
 }

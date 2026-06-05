@@ -1,0 +1,12 @@
+go 1.23
+
+use (
+	./client
+	./pdp
+	./pip
+	./pep
+	./common/cryptoutil
+	./common/noiseutil
+	./common/protocol
+	./common/logutil
+)

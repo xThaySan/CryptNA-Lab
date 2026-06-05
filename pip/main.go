@@ -8,15 +8,10 @@ import (
 	"os"
 	"strings"
 
+	"cryptna-lab/common/protocol"
 	_ "github.com/mattn/go-sqlite3"
+	"cryptna-lab/common/logutil"
 )
-
-type ClientInfo struct {
-	ClientPubKey     string   `json:"client_pubkey"`
-	PSK             string   `json:"psk"`
-	AllowedServices []string `json:"allowed_services"`
-	Revoked         bool     `json:"revoked"`
-}
 
 func main() {
 	db, err := sql.Open("sqlite3", "/data/pip.db")
@@ -39,10 +34,12 @@ func main() {
 			http.Error(w, "missing client public key", http.StatusBadRequest)
 			return
 		}
+		logutil.Debugf("pip", "lookup client=%s", logutil.Short(clientPubKey))
 
 		client, err := getClient(db, clientPubKey)
 		if err == sql.ErrNoRows {
 			http.Error(w, "client not found", http.StatusNotFound)
+			logutil.Debugf("pip", "client not found=%s", logutil.Short(clientPubKey))
 			return
 		}
 		if err != nil {
@@ -50,12 +47,13 @@ func main() {
 			log.Println("get client:", err)
 			return
 		}
+		logutil.Debugf("pip", "client found=%s services=%v revoked=%v", logutil.Short(client.ClientPubKey), client.AllowedServices, client.Revoked)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(client)
 	})
 
-	log.Println("PIP listening on :8080")
+	logutil.Infof("pip", "listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
@@ -74,6 +72,8 @@ func initDB(db *sql.DB) {
 }
 
 func seedClients(db *sql.DB, path string) {
+	logutil.Debugf("pip", "loading seed file path=%s", path)
+
 	f, err := os.Open(path)
 	if err != nil {
 		log.Printf("no seed file found at %s: %v", path, err)
@@ -81,7 +81,7 @@ func seedClients(db *sql.DB, path string) {
 	}
 	defer f.Close()
 
-	var clients []ClientInfo
+	var clients []protocol.ClientInfo
 	if err := json.NewDecoder(f).Decode(&clients); err != nil {
 		log.Fatalf("decode seed file: %v", err)
 	}
@@ -102,13 +102,13 @@ func seedClients(db *sql.DB, path string) {
 		if err != nil {
 			log.Fatalf("seed client %s: %v", c.ClientPubKey, err)
 		}
-
-		log.Printf("seeded client %s", c.ClientPubKey)
+		logutil.Debugf("pip", "seeded client=%s services=%v revoked=%v", logutil.Short(c.ClientPubKey), c.AllowedServices, c.Revoked)
 	}
+	
 }
 
-func getClient(db *sql.DB, pubkey string) (ClientInfo, error) {
-	var c ClientInfo
+func getClient(db *sql.DB, pubkey string) (protocol.ClientInfo, error) {
+	var c protocol.ClientInfo
 	var services string
 	var revoked int
 

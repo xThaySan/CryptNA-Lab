@@ -1,6 +1,8 @@
 {
   "pdp_udp_addr": "cryptna-pdp:4000",
-  "pdp_static_pub": "pdp-static-pubkey-demo",
+  "pdp_static_pub": "c0W3F27bfXGax47hCmZH0a+26VvVImvERcJj5AbBFVs=",
   "service_id": "svc-http",
-  "aead_suites": ["aes-gcm-128"]
+  "aead_suites": [
+    "aes-gcm-128"
+  ]
 }
