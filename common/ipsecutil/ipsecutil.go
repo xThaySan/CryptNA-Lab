@@ -164,7 +164,7 @@ func BuildClientXFRMTunnelPlan(in TunnelPlanInput) (protocol.XFRMPlan, error) {
 		fmt.Sprintf("ip xfrm policy delete src %s dst %s dir in", in.ServiceIP, in.ClientInnerIP),
 		fmt.Sprintf("ip xfrm state delete src %s dst %s proto esp spi %s", in.ClientOuterIP, in.PEPOuterIP, in.PEPInSPI),
 		fmt.Sprintf("ip xfrm state delete src %s dst %s proto esp spi %s", in.PEPOuterIP, in.ClientOuterIP, in.ClientInSPI),
-		fmt.Sprintf("ip route delete %s/32", in.ServiceIP),
+		fmt.Sprintf("ip route delete %s/32 via %s src %s", in.ServiceIP, in.PEPOuterIP, in.ClientInnerIP),
 		fmt.Sprintf("ip addr delete %s/32 dev lo", in.ClientInnerIP),
 	}
 

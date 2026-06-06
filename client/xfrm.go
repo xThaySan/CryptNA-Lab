@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"cryptna-lab/common/ipsecutil"
 	"cryptna-lab/common/logutil"
@@ -66,6 +67,33 @@ func maybeApplyClientXFRM(x protocol.XFRMPlan) error {
 	}
 
 	return nil
+}
+
+func scheduleClientXFRMCleanup(x protocol.XFRMPlan, delaySeconds int) error {
+	mode := getenv("XFRM_MODE", "dry-run")
+	if mode != "apply" {
+		logutil.Debugf("client", "XFRM dry-run mode, not scheduling cleanup")
+		return nil
+	}
+
+	if delaySeconds <= 0 {
+		logutil.Debugf("client", "invalid cleanup delay=%d, not scheduling cleanup", delaySeconds)
+		return nil
+	}
+
+	commands := make([]string, 0, len(x.DeleteCommands)+1)
+	commands = append(commands, fmt.Sprintf("sleep %d", delaySeconds))
+
+	for _, cmd := range x.DeleteCommands {
+		commands = append(commands, cmd+" >/dev/null 2>&1 || true")
+	}
+
+	script := strings.Join(commands, "; ")
+
+	logutil.Infof("client", "scheduling local XFRM cleanup in %ds", delaySeconds)
+
+	c := exec.Command("sh", "-c", script)
+	return c.Start()
 }
 
 func getenv(k, fallback string) string {

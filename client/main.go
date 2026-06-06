@@ -134,6 +134,9 @@ func main() {
 	if err := maybeApplyClientXFRM(xfrmPlan); err != nil {
 		log.Fatalf("client xfrm apply failed: %v", err)
 	}
+	if err := scheduleClientXFRMCleanup(xfrmPlan, out.Tunnel.SALifetime); err != nil {
+		log.Fatalf("client xfrm cleanup scheduling failed: %v", err)
+	}
 }
 
 func genIdentity() {
