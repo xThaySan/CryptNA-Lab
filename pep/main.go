@@ -30,6 +30,10 @@ func main() {
 	initAllocators()
 	go sessionReaper()
 
+	if err := setupPEPFirewall(); err != nil {
+		log.Fatalf("setup PEP firewall: %v", err)
+	}
+
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok\n"))

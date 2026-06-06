@@ -26,7 +26,7 @@ RUN go mod download
 RUN go build -o pep .
 
 FROM alpine:latest
-RUN apk add --no-cache curl iproute2 tcpdump
+RUN apk add --no-cache curl iproute2 tcpdump iptables
 WORKDIR /app
 COPY --from=build /src/pep/pep /app/pep
 CMD ["/app/pep"]
