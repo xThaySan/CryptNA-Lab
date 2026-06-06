@@ -115,3 +115,34 @@ SPA packet metrics and replay-cache benchmarks
 ## Important design note
 
 This implementation uses one configured `spa_psk` known by both the client and the PDP. This is necessary because in `IKpsk1`, the PSK is mixed before decrypting the encrypted client identity. A strictly per-client PSK would require either an external client hint, a PSK identifier, or trial decryption against candidate PSKs, which is not implemented in this minimal lab.
+
+## Refactor IPsec/XFRM model
+
+- Renamed SPI fields to match IPsec receiver-owned semantics:
+  - `client_in_spi`: SPI chosen by the client to receive PEP -> Client traffic.
+  - `pep_in_spi`: SPI chosen by the PEP to receive Client -> PEP traffic.
+- Removed the previous ambiguous `client_spi` / `pep_spi` model from the active protocol structs.
+- Added `common/ipsecutil` to factorize IPsec/XFRM-related helpers:
+  - random SPI generation;
+  - random reqid generation helper;
+  - RFC4106 AES-GCM key material derivation;
+  - XFRM tunnel plan generation.
+- Moved XFRM command construction out of `pep/xfrm.go` into `common/ipsecutil`.
+- Updated client and `tools/spa-send` to generate `client_in_spi` with the common helper.
+- Updated PEP to generate `pep_in_spi` itself, instead of trusting the client for the inbound SPI.
+- Added per-session metadata to `protocol.Session`:
+  - `reqid`;
+  - `client_outer_ip`;
+  - `client_inner_ip`;
+  - `pep_outer_ip`;
+  - `service_ip`.
+- Added per-session client inner IP allocation (`CLIENT_INNER_IP_PREFIX` / `CLIENT_INNER_IP_START`) so multiple clients sharing the same outer IP can still receive distinct XFRM policies.
+- Reworked XFRM tunnel generation so policies are keyed on `client_inner_ip -> service_ip`, avoiding global flushes and avoiding policy collisions for multiple sessions.
+- Added per-session `delete_commands` in the XFRM plan for future targeted cleanup instead of `ip xfrm flush`.
+- Updated Docker Compose PEP environment:
+  - `CLIENT_OUTER_IP`;
+  - `PEP_OUTER_IP`;
+  - `XFRM_REQID_BASE`;
+  - `CLIENT_INNER_IP_PREFIX`;
+  - `CLIENT_INNER_IP_START`.
+- Updated Dockerfiles to include `common/ipsecutil` in the relevant build contexts.

@@ -9,5 +9,6 @@ use (
 	./common/noiseutil
 	./common/protocol
 	./common/logutil
+	./common/ipsecutil
 	./tools/spa-send
 )

@@ -4,6 +4,7 @@ go 1.23
 
 require (
 	cryptna-lab/common/cryptoutil v0.0.0
+	cryptna-lab/common/ipsecutil v0.0.0
 	cryptna-lab/common/noiseutil v0.0.0
 	cryptna-lab/common/protocol v0.0.0
 )
@@ -15,3 +16,5 @@ replace cryptna-lab/common/cryptoutil => ../../common/cryptoutil
 replace cryptna-lab/common/noiseutil => ../../common/noiseutil
 
 replace cryptna-lab/common/protocol => ../../common/protocol
+
+replace cryptna-lab/common/ipsecutil => ../../common/ipsecutil

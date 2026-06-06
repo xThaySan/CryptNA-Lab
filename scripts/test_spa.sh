@@ -17,7 +17,7 @@ echo "$OUT"
 echo "[4] check client received authorization"
 echo "$OUT" | grep -q '"authorized": true'
 echo "$OUT" | grep -q '"tunnel"'
-echo "$OUT" | grep -q '"pep_spi"'
+echo "$OUT" | grep -q '"pep_in_spi"'
 echo "OK"
 
 echo "[5] check PEP stored at least one session"

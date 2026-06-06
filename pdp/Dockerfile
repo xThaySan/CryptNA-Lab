@@ -13,6 +13,7 @@ use (
 	./pdp
 	./common/noiseutil
 	./common/protocol
+	./common/logutil
 )
 WORK
 

@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"cryptna-lab/common/logutil"
 	"cryptna-lab/common/noiseutil"
 	"cryptna-lab/common/protocol"
-	"cryptna-lab/common/logutil"
 )
 
 const (
@@ -96,7 +96,7 @@ func handleUDPPacket(conn *net.UDPConn, remote *net.UDPAddr, packet []byte, pipU
 	now := time.Now().UTC()
 	packetHash := noiseutil.PacketHash(packet)
 	logutil.Debugf("pdp", "udp packet from=%s size=%d hash=%s", remote.String(), len(packet), packetHash)
-	
+
 	if replays.Seen(packetHash, now) {
 		logutil.Debugf("pdp", "drop replay hash=%s", packetHash)
 		return
@@ -114,7 +114,7 @@ func handleUDPPacket(conn *net.UDPConn, remote *net.UDPAddr, packet []byte, pipU
 	if err := json.Unmarshal(opened.Payload, &payload); err != nil {
 		return
 	}
-	logutil.Debugf("pdp", "access payload service=%s client_spi=%s client_dh_pub=%s aead=%v", payload.ServiceID, payload.ClientSPI, logutil.Short(payload.ClientDHPub), payload.AEADSuites)
+	logutil.Debugf("pdp", "access payload service=%s client_in_spi=%s client_dh_pub=%s aead=%v", payload.ServiceID, payload.ClientInSPI, logutil.Short(payload.ClientDHPub), payload.AEADSuites)
 
 	logutil.Debugf("pdp", "query PIP client=%s", logutil.Short(opened.ClientStaticPub))
 	client, err := fetchClient(pipURL, opened.ClientStaticPub)
@@ -127,7 +127,7 @@ func handleUDPPacket(conn *net.UDPConn, remote *net.UDPAddr, packet []byte, pipU
 	tunnel, err := activatePEP(pepURL, protocol.ActivateRequest{
 		ClientPubKey: opened.ClientStaticPub,
 		ServiceID:    payload.ServiceID,
-		ClientSPI:    payload.ClientSPI,
+		ClientInSPI:  payload.ClientInSPI,
 		ClientDHPub:  payload.ClientDHPub,
 		AEADSuites:   payload.AEADSuites,
 	})
@@ -135,7 +135,7 @@ func handleUDPPacket(conn *net.UDPConn, remote *net.UDPAddr, packet []byte, pipU
 		log.Println("activate PEP:", err)
 		return
 	}
-	logutil.Debugf("pdp", "PEP activated pep_spi=%s pep_dh_pub=%s expires_at=%s", tunnel.PEPSPI, logutil.Short(tunnel.PEPDHPub), tunnel.ExpiresAt)
+	logutil.Debugf("pdp", "PEP activated pep_in_spi=%s pep_dh_pub=%s expires_at=%s", tunnel.PEPInSPI, logutil.Short(tunnel.PEPDHPub), tunnel.ExpiresAt)
 
 	resp := protocol.AccessResponse{
 		Authorized: true,

@@ -9,9 +9,10 @@ import (
 	"time"
 
 	"cryptna-lab/common/cryptoutil"
+	"cryptna-lab/common/ipsecutil"
+	"cryptna-lab/common/logutil"
 	"cryptna-lab/common/noiseutil"
 	"cryptna-lab/common/protocol"
-	"cryptna-lab/common/logutil"
 )
 
 type ClientConfig struct {
@@ -41,9 +42,15 @@ func main() {
 	}
 	logutil.Debugf("client", "generated ephemeral dh pub=%s", logutil.Short(eph.PublicB64))
 
+	clientInSPI, err := ipsecutil.GenerateSPI()
+	if err != nil {
+		log.Fatal(err)
+	}
+	logutil.Debugf("client", "generated client_in_spi=%s", clientInSPI)
+
 	payload := protocol.AccessPayload{
 		ServiceID:   cfg.ServiceID,
-		ClientSPI:   "0x1001",
+		ClientInSPI: clientInSPI,
 		ClientDHPub: eph.PublicB64,
 		AEADSuites:  cfg.AEADSuites,
 	}
@@ -58,7 +65,6 @@ func main() {
 	}
 	logutil.Debugf("client", "built SPA packet size=%d hash=%s timestamp_ms=%d", len(spa.Packet), spa.PacketHash, spa.TimestampMS)
 
-	// Send SPA via UDP
 	logutil.Debugf("client", "sending SPA to %s", cfg.PDPUDPAddr)
 	udpAddr, err := net.ResolveUDPAddr("udp", cfg.PDPUDPAddr)
 	if err != nil {
@@ -114,6 +120,7 @@ func main() {
 		log.Fatal(err)
 	}
 	logutil.Debugf("client", "derived session keys c2p=%s p2c=%s", logutil.Short(c2p), logutil.Short(p2c))
+	logutil.Debugf("client", "tunnel params client_in_spi=%s pep_in_spi=%s client_inner_ip=%s", out.Tunnel.ClientInSPI, out.Tunnel.PEPInSPI, out.Tunnel.ClientInnerIP)
 }
 
 func genIdentity() {

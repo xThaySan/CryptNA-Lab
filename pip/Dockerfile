@@ -12,6 +12,7 @@ go 1.23
 use (
 	./pip
 	./common/protocol
+	./common/logutil
 )
 WORK
 

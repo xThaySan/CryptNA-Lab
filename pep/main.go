@@ -1,15 +1,18 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"cryptna-lab/common/cryptoutil"
+	"cryptna-lab/common/ipsecutil"
 	"cryptna-lab/common/logutil"
 	"cryptna-lab/common/protocol"
 )
@@ -17,9 +20,14 @@ import (
 var (
 	sessionsMu sync.RWMutex
 	sessions   = map[string]protocol.Session{}
+
+	nextReqID         uint32
+	nextClientInnerID uint32
 )
 
 func main() {
+	initAllocators()
+
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok\n"))
@@ -43,7 +51,7 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	logutil.Debugf("pep", "activation request client=%s service=%s client_spi=%s client_dh_pub=%s aead=%v", logutil.Short(req.ClientPubKey), req.ServiceID, req.ClientSPI, logutil.Short(req.ClientDHPub), req.AEADSuites)
+	logutil.Debugf("pep", "activation request client=%s service=%s client_in_spi=%s client_dh_pub=%s aead=%v", logutil.Short(req.ClientPubKey), req.ServiceID, req.ClientInSPI, logutil.Short(req.ClientDHPub), req.AEADSuites)
 
 	aead := "aes-gcm-128"
 	if len(req.AEADSuites) > 0 {
@@ -69,42 +77,68 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	logutil.Debugf("pep", "derived session keys c2p=%s p2c=%s", logutil.Short(c2pKey), logutil.Short(p2cKey))
 
+	pepInSPI, err := ipsecutil.GenerateSPI()
+	if err != nil {
+		http.Error(w, "spi generation failed", http.StatusInternalServerError)
+		return
+	}
+	reqID := allocateReqID()
+	clientInnerIP := allocateClientInnerIP()
+	clientOuterIP := getenv("CLIENT_OUTER_IP", getenv("CLIENT_DATA_IP", "172.21.0.10"))
+	pepOuterIP := getenv("PEP_OUTER_IP", getenv("PEP_DATA_IP", "172.21.0.40"))
+	serviceIP := getenv("SERVICE_IP", "172.22.0.50")
+
 	lifetime := 60
 	expiresAt := time.Now().Add(time.Duration(lifetime) * time.Second).UTC().Format(time.RFC3339)
-	pepSPI := randomHex(4)
 
 	session := protocol.Session{
-		ClientPubKey: req.ClientPubKey,
-		ServiceID:    req.ServiceID,
-		ClientSPI:    req.ClientSPI,
-		PEPSPI:       pepSPI,
-		ClientDHPub:  req.ClientDHPub,
-		PEPDHPub:     pepDH.PublicB64,
-		AEAD:         aead,
-		C2PKey:       c2pKey,
-		P2CKey:       p2cKey,
-		ExpiresAt:    expiresAt,
+		ClientPubKey:  req.ClientPubKey,
+		ServiceID:     req.ServiceID,
+		ReqID:         reqID,
+		ClientInSPI:   req.ClientInSPI,
+		PEPInSPI:      pepInSPI,
+		ClientOuterIP: clientOuterIP,
+		ClientInnerIP: clientInnerIP,
+		PEPOuterIP:    pepOuterIP,
+		ServiceIP:     serviceIP,
+		ClientDHPub:   req.ClientDHPub,
+		PEPDHPub:      pepDH.PublicB64,
+		AEAD:          aead,
+		C2PKey:        c2pKey,
+		P2CKey:        p2cKey,
+		ExpiresAt:     expiresAt,
 	}
 
-	session.XFRM = buildXFRMDryRun(session)
+	session.XFRM, err = buildXFRMPlan(session)
+	if err != nil {
+		http.Error(w, "xfrm plan failed", http.StatusInternalServerError)
+		return
+	}
+	if err := maybeApplyXFRM(session.XFRM); err != nil {
+		log.Printf("xfrm apply failed: %v", err)
+		http.Error(w, "xfrm apply failed", http.StatusInternalServerError)
+		return
+	}
 
 	sessionsMu.Lock()
-	sessions[pepSPI] = session
-	logutil.Debugf("pep", "stored session pep_spi=%s expires_at=%s sessions_count=%d", pepSPI, expiresAt, len(sessions))
+	sessions[pepInSPI] = session
+	logutil.Debugf("pep", "stored session pep_in_spi=%s client_in_spi=%s reqid=%d client_inner_ip=%s sessions_count=%d", pepInSPI, req.ClientInSPI, reqID, clientInnerIP, len(sessions))
 	sessionsMu.Unlock()
 
 	resp := protocol.TunnelParams{
-		ServiceID:  req.ServiceID,
-		PEPAddress: "172.21.0.40",
-		PEPPort:    4500,
-		PEPSPI:     pepSPI,
-		PEPDHPub:   pepDH.PublicB64,
-		AEAD:       aead,
-		SALifetime: lifetime,
-		ExpiresAt:  expiresAt,
+		ServiceID:     req.ServiceID,
+		PEPAddress:    pepOuterIP,
+		PEPPort:       4500,
+		ClientInSPI:   req.ClientInSPI,
+		PEPInSPI:      pepInSPI,
+		ClientInnerIP: clientInnerIP,
+		PEPDHPub:      pepDH.PublicB64,
+		AEAD:          aead,
+		SALifetime:    lifetime,
+		ExpiresAt:     expiresAt,
 	}
 
-	logutil.Infof("pep", "activated service=%s client=%s pep_spi=%s", req.ServiceID, logutil.Short(req.ClientPubKey), pepSPI)
+	logutil.Infof("pep", "activated service=%s client=%s pep_in_spi=%s client_in_spi=%s reqid=%d", req.ServiceID, logutil.Short(req.ClientPubKey), pepInSPI, req.ClientInSPI, reqID)
 	writeJSON(w, resp)
 }
 
@@ -119,15 +153,38 @@ func sessionsHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
-func randomHex(n int) string {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
+func initAllocators() {
+	baseReqID, err := strconv.ParseUint(getenv("XFRM_REQID_BASE", "1000"), 10, 32)
+	if err != nil || baseReqID == 0 {
+		baseReqID = 1000
 	}
-	return "0x" + hex.EncodeToString(b)
+	atomic.StoreUint32(&nextReqID, uint32(baseReqID-1))
+
+	baseInnerHost, err := strconv.ParseUint(getenv("CLIENT_INNER_IP_START", "10"), 10, 32)
+	if err != nil || baseInnerHost == 0 {
+		baseInnerHost = 10
+	}
+	atomic.StoreUint32(&nextClientInnerID, uint32(baseInnerHost-1))
+}
+
+func allocateReqID() uint32 {
+	return atomic.AddUint32(&nextReqID, 1)
+}
+
+func allocateClientInnerIP() string {
+	prefix := getenv("CLIENT_INNER_IP_PREFIX", "10.200.0")
+	host := atomic.AddUint32(&nextClientInnerID, 1)
+	return fmt.Sprintf("%s.%d", prefix, host)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+func getenv(k, fallback string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return fallback
 }

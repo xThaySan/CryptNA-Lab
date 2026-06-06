@@ -2,6 +2,7 @@ FROM golang:1.23-alpine AS build
 WORKDIR /src
 
 COPY common/cryptoutil ./common/cryptoutil
+COPY common/ipsecutil ./common/ipsecutil
 COPY common/noiseutil ./common/noiseutil
 COPY common/protocol ./common/protocol
 COPY common/logutil ./common/logutil
@@ -13,8 +14,10 @@ go 1.23
 use (
 	./client
 	./common/cryptoutil
+	./common/ipsecutil
 	./common/noiseutil
 	./common/protocol
+	./common/logutil
 )
 WORK
 

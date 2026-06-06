@@ -2,6 +2,7 @@ FROM golang:1.23-alpine AS build
 WORKDIR /src
 
 COPY common/cryptoutil ./common/cryptoutil
+COPY common/ipsecutil ./common/ipsecutil
 COPY common/noiseutil ./common/noiseutil
 COPY common/protocol ./common/protocol
 COPY tools/spa-send ./tools/spa-send
@@ -12,6 +13,7 @@ go 1.23
 use (
 	./tools/spa-send
 	./common/cryptoutil
+	./common/ipsecutil
 	./common/noiseutil
 	./common/protocol
 )

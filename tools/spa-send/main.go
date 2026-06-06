@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"cryptna-lab/common/cryptoutil"
+	"cryptna-lab/common/ipsecutil"
 	"cryptna-lab/common/noiseutil"
 	"cryptna-lab/common/protocol"
 )
@@ -90,9 +91,14 @@ func buildPacket(cfg ClientConfig, id ClientIdentity, offset time.Duration) []by
 		log.Fatal(err)
 	}
 
+	clientInSPI, err := ipsecutil.GenerateSPI()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	payload := protocol.AccessPayload{
 		ServiceID:   cfg.ServiceID,
-		ClientSPI:   "0x1001",
+		ClientInSPI: clientInSPI,
 		ClientDHPub: eph.PublicB64,
 		AEADSuites:  cfg.AEADSuites,
 	}
@@ -109,8 +115,8 @@ func buildPacket(cfg ClientConfig, id ClientIdentity, offset time.Duration) []by
 		log.Fatal(err)
 	}
 
-	fmt.Printf("packet_hash=%s timestamp_ms=%d size=%d offset=%s\n",
-		spa.PacketHash, spa.TimestampMS, len(spa.Packet), offset)
+	fmt.Printf("packet_hash=%s timestamp_ms=%d size=%d offset=%s client_in_spi=%s\n",
+		spa.PacketHash, spa.TimestampMS, len(spa.Packet), offset, clientInSPI)
 
 	return spa.Packet
 }
@@ -120,13 +126,17 @@ func buildClearJSON(cfg ClientConfig, id ClientIdentity) []byte {
 	if err != nil {
 		log.Fatal(err)
 	}
+	clientInSPI, err := ipsecutil.GenerateSPI()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	req := map[string]any{
 		"client_pubkey": id.ClientStaticPub,
-		"service_id":   cfg.ServiceID,
-		"client_spi":   "0x1001",
+		"service_id":    cfg.ServiceID,
+		"client_in_spi": clientInSPI,
 		"client_dh_pub": eph.PublicB64,
-		"aead_suites":  cfg.AEADSuites,
+		"aead_suites":   cfg.AEADSuites,
 	}
 
 	out, err := json.Marshal(req)
