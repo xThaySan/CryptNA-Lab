@@ -28,6 +28,7 @@ var (
 
 func main() {
 	initAllocators()
+	go sessionReaper()
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -107,7 +108,7 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 	serviceIP := getenv("SERVICE_IP", "172.22.0.50")
 	nattPort := getenvInt("NATT_PORT", 4500)
 
-	lifetime := 60
+	lifetime := getenvInt("SA_LIFETIME_SECONDS", 60)
 	expiresAt := time.Now().Add(time.Duration(lifetime) * time.Second).UTC().Format(time.RFC3339)
 
 	session := protocol.Session{
@@ -196,6 +197,53 @@ func allocateClientInnerIP() string {
 	prefix := getenv("CLIENT_INNER_IP_PREFIX", "10.200.0")
 	host := atomic.AddUint32(&nextClientInnerID, 1)
 	return fmt.Sprintf("%s.%d", prefix, host)
+}
+
+func sessionReaper() {
+	interval := time.Duration(getenvInt("SESSION_REAPER_INTERVAL_SECONDS", 5)) * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	logutil.Infof("pep", "session reaper started interval=%s", interval)
+
+	for range ticker.C {
+		cleanupExpiredSessions(time.Now().UTC())
+	}
+}
+
+func cleanupExpiredSessions(now time.Time) {
+	expired := make([]protocol.Session, 0)
+
+	sessionsMu.Lock()
+	for key, session := range sessions {
+		expiresAt, err := time.Parse(time.RFC3339, session.ExpiresAt)
+		if err != nil {
+			logutil.Debugf("pep", "invalid session expiry pep_in_spi=%s expires_at=%s err=%v", session.PEPInSPI, session.ExpiresAt, err)
+			continue
+		}
+
+		if now.Before(expiresAt) {
+			continue
+		}
+
+		delete(sessions, key)
+		expired = append(expired, session)
+	}
+	sessionsMu.Unlock()
+
+	for _, session := range expired {
+		logutil.Infof("pep", "session expired, deleting XFRM client=%s service=%s pep_in_spi=%s client_in_spi=%s reqid=%d",
+			logutil.Short(session.ClientPubKey),
+			session.ServiceID,
+			session.PEPInSPI,
+			session.ClientInSPI,
+			session.ReqID,
+		)
+
+		if err := maybeDeleteXFRM(session.XFRM); err != nil {
+			log.Printf("xfrm delete failed: %v", err)
+		}
+	}
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

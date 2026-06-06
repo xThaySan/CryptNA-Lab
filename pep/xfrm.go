@@ -42,3 +42,24 @@ func maybeApplyXFRM(x protocol.XFRMPlan) error {
 
 	return nil
 }
+
+func maybeDeleteXFRM(x protocol.XFRMPlan) error {
+	mode := getenv("XFRM_MODE", "dry-run")
+	if mode != "apply" {
+		logutil.Debugf("pep", "XFRM dry-run mode, not deleting commands")
+		return nil
+	}
+
+	for _, cmd := range x.DeleteCommands {
+		logutil.Infof("pep", "deleting XFRM: %s", cmd)
+
+		out, err := exec.Command("sh", "-c", cmd).CombinedOutput()
+		if err != nil {
+			// Best effort cleanup: the state/policy may already be gone.
+			logutil.Debugf("pep", "XFRM delete command failed but ignored: cmd=%s err=%v out=%s", cmd, err, string(out))
+			continue
+		}
+	}
+
+	return nil
+}
