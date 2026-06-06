@@ -14,6 +14,7 @@ import (
 	"cryptna-lab/common/cryptoutil"
 	"cryptna-lab/common/ipsecutil"
 	"cryptna-lab/common/logutil"
+	"cryptna-lab/common/nattutil"
 	"cryptna-lab/common/protocol"
 )
 
@@ -36,8 +37,15 @@ func main() {
 	http.HandleFunc("/activate", activateHandler)
 	http.HandleFunc("/sessions", sessionsHandler)
 
-	logutil.Infof("pep", "listening on :8080")
+	nattSocket, err := nattutil.ListenESPInUDP(4500)
+	if err != nil {
+		log.Fatalf("start NAT-T UDP/4500 socket: %v", err)
+	}
+	defer nattSocket.Close()
+	logutil.Infof("pep", "NAT-T ESP-in-UDP socket listening on :4500")
+
 	log.Fatal(http.ListenAndServe(":8080", nil))
+	logutil.Infof("pep", "listening on :8080")
 }
 
 func activateHandler(w http.ResponseWriter, r *http.Request) {
@@ -52,6 +60,16 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logutil.Debugf("pep", "activation request client=%s service=%s client_in_spi=%s client_dh_pub=%s aead=%v", logutil.Short(req.ClientPubKey), req.ServiceID, req.ClientInSPI, logutil.Short(req.ClientDHPub), req.AEADSuites)
+	if req.ClientInSPI == "" {
+		logutil.Debugf("pep", "reject activation: missing client_in_spi client=%s service=%s", logutil.Short(req.ClientPubKey), req.ServiceID)
+		http.Error(w, "missing client_in_spi", http.StatusBadRequest)
+		return
+	}
+	if req.ClientDHPub == "" {
+		logutil.Debugf("pep", "reject activation: missing client_dh_pub client=%s service=%s", logutil.Short(req.ClientPubKey), req.ServiceID)
+		http.Error(w, "missing client_dh_pub", http.StatusBadRequest)
+		return
+	}
 
 	aead := "aes-gcm-128"
 	if len(req.AEADSuites) > 0 {
@@ -87,6 +105,7 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 	clientOuterIP := getenv("CLIENT_OUTER_IP", getenv("CLIENT_DATA_IP", "172.21.0.10"))
 	pepOuterIP := getenv("PEP_OUTER_IP", getenv("PEP_DATA_IP", "172.21.0.40"))
 	serviceIP := getenv("SERVICE_IP", "172.22.0.50")
+	nattPort := getenvInt("NATT_PORT", 4500)
 
 	lifetime := 60
 	expiresAt := time.Now().Add(time.Duration(lifetime) * time.Second).UTC().Format(time.RFC3339)
@@ -101,6 +120,7 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 		ClientInnerIP: clientInnerIP,
 		PEPOuterIP:    pepOuterIP,
 		ServiceIP:     serviceIP,
+		NATTPort:      nattPort,
 		ClientDHPub:   req.ClientDHPub,
 		PEPDHPub:      pepDH.PublicB64,
 		AEAD:          aead,
@@ -127,8 +147,9 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp := protocol.TunnelParams{
 		ServiceID:     req.ServiceID,
+		ServiceIP:     serviceIP,
 		PEPAddress:    pepOuterIP,
-		PEPPort:       4500,
+		PEPPort:       nattPort,
 		ClientInSPI:   req.ClientInSPI,
 		PEPInSPI:      pepInSPI,
 		ClientInnerIP: clientInnerIP,
@@ -187,4 +208,16 @@ func getenv(k, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getenvInt(k string, fallback int) int {
+	v := os.Getenv(k)
+	if v == "" {
+		return fallback
+	}
+	out, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return out
 }

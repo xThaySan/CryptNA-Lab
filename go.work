@@ -10,5 +10,7 @@ use (
 	./common/protocol
 	./common/logutil
 	./common/ipsecutil
+	./common/nattutil
 	./tools/spa-send
+	./tools/natt-listener
 )

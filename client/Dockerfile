@@ -6,6 +6,8 @@ COPY common/ipsecutil ./common/ipsecutil
 COPY common/noiseutil ./common/noiseutil
 COPY common/protocol ./common/protocol
 COPY common/logutil ./common/logutil
+COPY common/nattutil ./common/nattutil
+COPY tools/natt-listener ./tools/natt-listener
 COPY client ./client
 
 RUN cat > go.work <<'WORK'
@@ -18,6 +20,8 @@ use (
 	./common/noiseutil
 	./common/protocol
 	./common/logutil
+	./common/nattutil
+	./tools/natt-listener
 )
 WORK
 
@@ -25,10 +29,15 @@ WORKDIR /src/client
 RUN go mod download
 RUN go build -o client .
 
+WORKDIR /src/tools/natt-listener
+RUN go mod download
+RUN go build -o natt-listener .
+
 FROM alpine:latest
-RUN apk add --no-cache curl
+RUN apk add --no-cache curl iproute2 tcpdump
 WORKDIR /app
 COPY --from=build /src/client/client /app/client
+COPY --from=build /src/tools/natt-listener/natt-listener /app/natt-listener
 COPY client/config.json /app/config.json
 COPY client/identity.json /app/identity.json
-CMD ["sleep", "infinity"]
+CMD ["sh", "-c", "/app/natt-listener -port 4500 & sleep infinity"]

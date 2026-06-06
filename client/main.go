@@ -120,7 +120,20 @@ func main() {
 		log.Fatal(err)
 	}
 	logutil.Debugf("client", "derived session keys c2p=%s p2c=%s", logutil.Short(c2p), logutil.Short(p2c))
-	logutil.Debugf("client", "tunnel params client_in_spi=%s pep_in_spi=%s client_inner_ip=%s", out.Tunnel.ClientInSPI, out.Tunnel.PEPInSPI, out.Tunnel.ClientInnerIP)
+	logutil.Debugf("client", "tunnel params service_ip=%s client_inner_ip=%s client_in_spi=%s pep_in_spi=%s", out.Tunnel.ServiceIP, out.Tunnel.ClientInnerIP, out.Tunnel.ClientInSPI, out.Tunnel.PEPInSPI)
+
+	clientReqID, err := ipsecutil.GenerateReqID()
+	if err != nil {
+		log.Fatal(err)
+	}
+	logutil.Debugf("client", "generated local xfrm reqid=%d", clientReqID)
+	xfrmPlan, err := buildClientXFRMPlan(*out.Tunnel, c2p, p2c, clientReqID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := maybeApplyClientXFRM(xfrmPlan); err != nil {
+		log.Fatalf("client xfrm apply failed: %v", err)
+	}
 }
 
 func genIdentity() {

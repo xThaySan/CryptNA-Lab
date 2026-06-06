@@ -146,3 +146,40 @@ This implementation uses one configured `spa_psk` known by both the client and t
   - `CLIENT_INNER_IP_PREFIX`;
   - `CLIENT_INNER_IP_START`.
 - Updated Dockerfiles to include `common/ipsecutil` in the relevant build contexts.
+
+## Client-side XFRM/NAT-T tunnel plan and L3 service forwarding model
+
+- Fixed the CRYPTNA data-plane model around the validated L3 tunnel semantics:
+  - the PEP assigns a per-session `client_inner_ip`;
+  - the client agent uses this address as the inner source address;
+  - the client still learns the real `service_ip` only after authorization;
+  - traffic is protected as `client_inner_ip -> service_ip` inside the IPsec tunnel;
+  - outer transport remains `client_outer_ip -> pep_outer_ip` using ESP-in-UDP NAT-T.
+- Extended `common/protocol.TunnelParams` to include:
+  - `service_ip`;
+  - `client_inner_ip`;
+  - `reqid`.
+- Extended `common/protocol.Session` to consistently include `client_inner_ip` and NAT-T metadata.
+- Refactored `common/ipsecutil`:
+  - added `BuildPEPXFRMTunnelPlan(...)` for PEP-side tunnel states/policies;
+  - added `BuildClientXFRMTunnelPlan(...)` for client-side tunnel states/policies;
+  - preserved `BuildXFRMTunnelPlan(...)` as a PEP-side compatibility wrapper.
+- Corrected PEP XFRM policies to match the intended inner traffic:
+  - `client_inner_ip -> service_ip` with `dir fwd`;
+  - `service_ip -> client_inner_ip` with `dir out`.
+- Added client-side XFRM support:
+  - configures `client_inner_ip/32` on `lo`;
+  - installs route to `service_ip` via the PEP outer IP with source `client_inner_ip`;
+  - installs NAT-T XFRM states/policies for both directions;
+  - respects `XFRM_MODE=dry-run|apply`.
+- Updated the client image to include `iproute2` and added `NET_ADMIN` to the client service.
+- Updated the service HTTP container:
+  - now built from `service/Dockerfile`;
+  - includes `iproute2`;
+  - adds a return route for `10.200.0.0/24` via the PEP service-side IP.
+- Added `scripts/test_xfrm_end_to_end.sh`:
+  - creates a tunnel;
+  - checks client and PEP XFRM state/policy installation;
+  - checks service-side route to tunnel clients;
+  - attempts an HTTP request from client to service through the tunnel.
+- Updated `scripts/test_xfrm_multi_session.sh` to also account for client-side XFRM installation and cleanup.

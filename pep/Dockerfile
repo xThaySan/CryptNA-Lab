@@ -5,6 +5,7 @@ COPY common/cryptoutil ./common/cryptoutil
 COPY common/ipsecutil ./common/ipsecutil
 COPY common/protocol ./common/protocol
 COPY common/logutil ./common/logutil
+COPY common/nattutil ./common/nattutil
 COPY pep ./pep
 
 RUN cat > go.work <<'WORK'
@@ -16,6 +17,7 @@ use (
 	./common/ipsecutil
 	./common/protocol
 	./common/logutil
+	./common/nattutil
 )
 WORK
 
@@ -24,7 +26,7 @@ RUN go mod download
 RUN go build -o pep .
 
 FROM alpine:latest
-RUN apk add --no-cache curl iproute2
+RUN apk add --no-cache curl iproute2 tcpdump
 WORKDIR /app
 COPY --from=build /src/pep/pep /app/pep
 CMD ["/app/pep"]

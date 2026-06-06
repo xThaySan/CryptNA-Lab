@@ -6,7 +6,9 @@ N="${1:-3}"
 echo "[1] ensure lab is up with XFRM apply mode"
 XFRM_MODE=apply docker compose up -d >/dev/null
 
-echo "[2] cleanup existing XFRM states/policies"
+echo "[2] cleanup existing XFRM states/policies on client and PEP"
+docker exec cryptna-client ip xfrm policy flush || true
+docker exec cryptna-client ip xfrm state flush || true
 docker exec cryptna-pep ip xfrm policy flush || true
 docker exec cryptna-pep ip xfrm state flush || true
 
@@ -18,6 +20,9 @@ for i in $(seq 1 "$N"); do
   echo "activation $i"
   docker exec cryptna-client /app/client >/tmp/cryptna-client-$i.out
   grep -q '"authorized": true' /tmp/cryptna-client-$i.out
+  grep -q '"client_inner_ip"' /tmp/cryptna-client-$i.out
+  grep -q '"service_ip"' /tmp/cryptna-client-$i.out
+  grep -q '"reqid"' /tmp/cryptna-client-$i.out
 done
 
 echo "[5] read PEP sessions"
@@ -58,23 +63,39 @@ if [ "$PEP_SPI_COUNT" -ne "$N" ]; then
   exit 1
 fi
 
-echo "[9] verify XFRM state count"
-STATE_COUNT="$(docker exec cryptna-pep ip xfrm state | grep -c '^src ' || true)"
+echo "[9] verify PEP XFRM state count"
+PEP_STATE_COUNT="$(docker exec cryptna-pep ip xfrm state | grep -c '^src ' || true)"
 EXPECTED_STATES=$((N * 2))
 
-if [ "$STATE_COUNT" -ne "$EXPECTED_STATES" ]; then
-  echo "ERROR: expected $EXPECTED_STATES XFRM states, got $STATE_COUNT"
+if [ "$PEP_STATE_COUNT" -ne "$EXPECTED_STATES" ]; then
+  echo "ERROR: expected $EXPECTED_STATES PEP XFRM states, got $PEP_STATE_COUNT"
   docker exec cryptna-pep ip xfrm state
   exit 1
 fi
 
-echo "[10] verify XFRM policy count"
-POLICY_COUNT="$(docker exec cryptna-pep ip xfrm policy | grep -c '^src ' || true)"
+echo "[10] verify PEP XFRM policy count"
+PEP_POLICY_COUNT="$(docker exec cryptna-pep ip xfrm policy | grep -c '^src ' || true)"
 EXPECTED_POLICIES=$((N * 2))
 
-if [ "$POLICY_COUNT" -ne "$EXPECTED_POLICIES" ]; then
-  echo "ERROR: expected $EXPECTED_POLICIES XFRM policies, got $POLICY_COUNT"
+if [ "$PEP_POLICY_COUNT" -ne "$EXPECTED_POLICIES" ]; then
+  echo "ERROR: expected $EXPECTED_POLICIES PEP XFRM policies, got $PEP_POLICY_COUNT"
   docker exec cryptna-pep ip xfrm policy
+  exit 1
+fi
+
+echo "[11] verify client XFRM has at least the latest session installed"
+CLIENT_STATE_COUNT="$(docker exec cryptna-client ip xfrm state | grep -c '^src ' || true)"
+CLIENT_POLICY_COUNT="$(docker exec cryptna-client ip xfrm policy | grep -c '^src ' || true)"
+
+if [ "$CLIENT_STATE_COUNT" -lt 2 ]; then
+  echo "ERROR: expected at least 2 client XFRM states, got $CLIENT_STATE_COUNT"
+  docker exec cryptna-client ip xfrm state
+  exit 1
+fi
+
+if [ "$CLIENT_POLICY_COUNT" -lt 2 ]; then
+  echo "ERROR: expected at least 2 client XFRM policies, got $CLIENT_POLICY_COUNT"
+  docker exec cryptna-client ip xfrm policy
   exit 1
 fi
 

@@ -15,6 +15,7 @@ func buildXFRMPlan(s protocol.Session) (protocol.XFRMPlan, error) {
 		ClientInnerIP: s.ClientInnerIP,
 		PEPOuterIP:    s.PEPOuterIP,
 		ServiceIP:     s.ServiceIP,
+		NATTPort:      s.NATTPort,
 		ClientInSPI:   s.ClientInSPI,
 		PEPInSPI:      s.PEPInSPI,
 		ReqID:         s.ReqID,

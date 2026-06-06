@@ -7,14 +7,17 @@ services:
       context: .
       dockerfile: client/Dockerfile
     container_name: cryptna-client
-    command: sleep infinity
     networks:
       control_net:
         ipv4_address: 172.20.0.10
       data_net:
         ipv4_address: 172.21.0.10
+    cap_add:
+      - NET_ADMIN
     environment:
       <<: *debug-env
+      XFRM_MODE: ${XFRM_MODE:-dry-run}
+      CLIENT_OUTER_IP: 172.21.0.10
 
   pdp:
     build:
@@ -53,7 +56,7 @@ services:
       service_net:
         ipv4_address: 172.22.0.40
     cap_add:
-    - NET_ADMIN
+      - NET_ADMIN
     sysctls:
       net.ipv4.ip_forward: "1"
     environment:
@@ -62,13 +65,18 @@ services:
       CLIENT_OUTER_IP: 172.21.0.10
       PEP_OUTER_IP: 172.21.0.40
       SERVICE_IP: 172.22.0.50
+      NATT_PORT: 4500
       XFRM_REQID_BASE: 1000
       CLIENT_INNER_IP_PREFIX: 10.200.0
       CLIENT_INNER_IP_START: 10
 
   service-http:
-    image: nginx:alpine
+    build:
+      context: .
+      dockerfile: service/Dockerfile
     container_name: cryptna-service-http
+    cap_add:
+      - NET_ADMIN
     networks:
       service_net:
         ipv4_address: 172.22.0.50

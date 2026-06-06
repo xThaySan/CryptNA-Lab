@@ -20,3 +20,5 @@ replace cryptna-lab/common/protocol => ../common/protocol
 replace cryptna-lab/common/logutil => ../common/logutil
 
 replace cryptna-lab/common/ipsecutil => ../common/ipsecutil
+
+replace cryptna-lab/common/nattutil => ../common/nattutil
