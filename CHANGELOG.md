@@ -139,9 +139,8 @@ This implementation uses one configured `spa_psk` known by both the client and t
 - Added per-session client inner IP allocation (`CLIENT_INNER_IP_PREFIX` / `CLIENT_INNER_IP_START`) so multiple clients sharing the same outer IP can still receive distinct XFRM policies.
 - Reworked XFRM tunnel generation so policies are keyed on `client_inner_ip -> service_ip`, avoiding global flushes and avoiding policy collisions for multiple sessions.
 - Added per-session `delete_commands` in the XFRM plan for future targeted cleanup instead of `ip xfrm flush`.
-- Updated Docker Compose PEP environment:
-  - `CLIENT_OUTER_IP`;
-  - `PEP_OUTER_IP`;
+- Updated Docker Compose PEP environment for local XFRM state generation:
+  - `PEP_LOCAL_ENDPOINT_IP`;
   - `XFRM_REQID_BASE`;
   - `CLIENT_INNER_IP_PREFIX`;
   - `CLIENT_INNER_IP_START`.
@@ -157,8 +156,8 @@ This implementation uses one configured `spa_psk` known by both the client and t
   - outer transport remains `client_outer_ip -> pep_outer_ip` using ESP-in-UDP NAT-T.
 - Extended `common/protocol.TunnelParams` to include:
   - `service_ip`;
-  - `client_inner_ip`;
-  - `reqid`.
+  - `client_inner_ip`.
+- Kept XFRM `reqid` local to each endpoint; it is not returned to the client.
 - Extended `common/protocol.Session` to consistently include `client_inner_ip` and NAT-T metadata.
 - Refactored `common/ipsecutil`:
   - added `BuildPEPXFRMTunnelPlan(...)` for PEP-side tunnel states/policies;
@@ -183,3 +182,34 @@ This implementation uses one configured `spa_psk` known by both the client and t
   - checks service-side route to tunnel clients;
   - attempts an HTTP request from client to service through the tunnel.
 - Updated `scripts/test_xfrm_multi_session.sh` to also account for client-side XFRM installation and cleanup.
+
+
+## WAN topology correction and observed client outer IP
+
+- Reworked Docker networking to match the CRYPTNA architecture:
+  - `wan_net`: Client, PDP, and PEP share the external/WAN-facing network.
+  - `pdp_pip_net`: private PDP-PIP network.
+  - `pdp_pep_net`: private PDP-PEP control network.
+  - `service_net`: private PEP-Service network.
+- Removed the previous split where the client used separate `control_net` and `data_net` links.
+- Removed `CLIENT_OUTER_IP` from the client/PEP trust path.
+- The client no longer declares its outer address in the SPA payload.
+- The PDP now derives `client_outer_ip` from the UDP source address observed on the WAN-facing SPA packet and passes it to the PEP in `ActivateRequest`.
+- The PEP requires `client_outer_ip` from the PDP and uses it to install NAT-T XFRM states.
+- The client infers its own local WAN address locally from the route to the authorized PEP address; this value is used only to install local XFRM state and is not sent in the SPA.
+- The PEP address returned to the client is now the WAN-facing PEP address.
+- Added `SECURITY_NOTES.md` documenting the accepted v0 UDP source-spoofing risk before a future return-reachability mitigation.
+
+
+## PDP-owned PEP WAN endpoint correction
+
+- Split the PEP activation response from the client-facing tunnel response:
+  - `protocol.PEPActivationResponse` is returned by the PEP to the PDP and does not contain `pep_address` or `pep_port`;
+  - `protocol.TunnelParams` is built by the PDP and contains the client-facing `pep_address` / `pep_port`.
+- The PDP now selects and injects the PEP WAN endpoint using:
+  - `PEP_CONTROL_URL` for PDP -> PEP activation;
+  - `PEP_WAN_ADDRESS` for the PEP endpoint returned to the client;
+  - `PEP_NATT_PORT` for the NAT-T UDP port returned to the client.
+- The PEP no longer self-reports its WAN endpoint to the client.
+- Renamed the PEP-side XFRM endpoint configuration to `PEP_LOCAL_ENDPOINT_IP` to make clear it is used only for local XFRM state generation, not as an advertised endpoint.
+- Preserved the trust model: the client does not declare its outer IP; the PDP observes it from the UDP SPA source address and passes it to the PEP.

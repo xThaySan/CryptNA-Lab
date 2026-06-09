@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+chmod +x scripts/*.sh
+
 echo "=== CRYPTNA security regression suite ==="
 
 echo

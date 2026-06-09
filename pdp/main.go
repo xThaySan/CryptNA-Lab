@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -49,13 +50,25 @@ func (c *replayCache) Add(hash string, now time.Time) {
 }
 
 func main() {
-	pipURL := getenv("PIP_URL", "http://cryptna-pip:8080")
-	pepURL := getenv("PEP_URL", "http://cryptna-pep:8080")
+	pipURL := getenv("PIP_URL", "")
+	if pipURL == "" {
+		log.Fatal("missing PIP_URL: PDP must know the PIP control endpoint")
+	}
+	pepControlURL := getenv("PEP_CONTROL_URL", "")
+	if pepControlURL == "" {
+		log.Fatal("missing PEP_CONTROL_URL: PDP must know the selected PEP control endpoint")
+	}
+	pepWANAddress := getenv("PEP_WAN_ADDRESS", "")
+	if pepWANAddress == "" {
+		log.Fatal("missing PEP_WAN_ADDRESS: PDP must provide the client-facing PEP endpoint")
+	}
+	pepNATTPort := getenvInt("PEP_NATT_PORT", 4500)
 	identityPath := getenv("PDP_IDENTITY", "/app/identity.json")
 	pdpID := mustLoadJSON[noiseutil.PDPIdentity](identityPath)
 	replays := newReplayCache()
 
 	logutil.Debugf("pdp", "debug enabled replay_ttl=%s spa_skew=%s", replayTTL, spaSkew)
+	logutil.Infof("pdp", "selected PEP control_url=%s wan_endpoint=%s:%d", pepControlURL, pepWANAddress, pepNATTPort)
 
 	go startHealthServer()
 
@@ -80,7 +93,7 @@ func main() {
 		}
 		packet := make([]byte, n)
 		copy(packet, buf[:n])
-		go handleUDPPacket(conn, remote, packet, pipURL, pepURL, pdpID, replays)
+		go handleUDPPacket(conn, remote, packet, pipURL, pepControlURL, pepWANAddress, pepNATTPort, pdpID, replays)
 	}
 }
 
@@ -92,19 +105,34 @@ func startHealthServer() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func handleUDPPacket(conn *net.UDPConn, remote *net.UDPAddr, packet []byte, pipURL, pepURL string, pdpID noiseutil.PDPIdentity, replays *replayCache) {
+func handleUDPPacket(conn *net.UDPConn, remote *net.UDPAddr, packet []byte, pipURL, pepControlURL, pepWANAddress string, pepNATTPort int, pdpID noiseutil.PDPIdentity, replays *replayCache) {
 	now := time.Now().UTC()
 	packetHash := noiseutil.PacketHash(packet)
-	logutil.Debugf("pdp", "udp packet from=%s size=%d hash=%s", remote.String(), len(packet), packetHash)
+	clientOuterIP := remote.IP.String()
+	logutil.Debugf("pdp", "udp packet from=%s observed_client_outer_ip=%s size=%d hash=%s", remote.String(), clientOuterIP, len(packet), packetHash)
 
 	if replays.Seen(packetHash, now) {
 		logutil.Debugf("pdp", "drop replay hash=%s", packetHash)
 		return
 	}
 
-	opened, err := noiseutil.OpenIKpsk1SPA(packet, pdpID, now, spaSkew)
+	header, err := noiseutil.OpenIKpsk1SPAHeader(packet, pdpID, now, spaSkew)
 	if err != nil {
-		logutil.Debugf("pdp", "drop invalid SPA from=%s err=%v", remote.String(), err)
+		logutil.Debugf("pdp", "drop invalid SPA header from=%s err=%v", remote.String(), err)
+		return
+	}
+	logutil.Debugf("pdp", "SPA header opened client=%s timestamp_ms=%d hash=%s", logutil.Short(header.ClientStaticPub), header.TimestampMS, header.PacketHash)
+
+	logutil.Debugf("pdp", "query PIP client=%s", logutil.Short(header.ClientStaticPub))
+	client, err := fetchClient(pipURL, header.ClientStaticPub)
+	if err != nil || client.Revoked {
+		logutil.Debugf("pdp", "drop unknown/revoked client=%s err=%v revoked=%v", logutil.Short(header.ClientStaticPub), err, client.Revoked)
+		return
+	}
+
+	opened, err := noiseutil.CompleteIKpsk1SPA(header, client.PSK)
+	if err != nil {
+		logutil.Debugf("pdp", "drop invalid SPA payload client=%s err=%v", logutil.Short(header.ClientStaticPub), err)
 		return
 	}
 	logutil.Debugf("pdp", "SPA opened client=%s timestamp_ms=%d payload_size=%d hash=%s", logutil.Short(opened.ClientStaticPub), opened.TimestampMS, len(opened.Payload), opened.PacketHash)
@@ -116,26 +144,40 @@ func handleUDPPacket(conn *net.UDPConn, remote *net.UDPAddr, packet []byte, pipU
 	}
 	logutil.Debugf("pdp", "access payload service=%s client_in_spi=%s client_dh_pub=%s aead=%v", payload.ServiceID, payload.ClientInSPI, logutil.Short(payload.ClientDHPub), payload.AEADSuites)
 
-	logutil.Debugf("pdp", "query PIP client=%s", logutil.Short(opened.ClientStaticPub))
-	client, err := fetchClient(pipURL, opened.ClientStaticPub)
-	if err != nil || client.Revoked || !contains(client.AllowedServices, payload.ServiceID) {
-		logutil.Debugf("pdp", "drop unauthorized client=%s service=%s err=%v revoked=%v", logutil.Short(opened.ClientStaticPub), payload.ServiceID, err, client.Revoked)
+	if !contains(client.AllowedServices, payload.ServiceID) {
+		logutil.Debugf("pdp", "drop unauthorized client=%s service=%s", logutil.Short(opened.ClientStaticPub), payload.ServiceID)
 		return
 	}
 
-	logutil.Debugf("pdp", "activate PEP client=%s service=%s", logutil.Short(opened.ClientStaticPub), payload.ServiceID)
-	tunnel, err := activatePEP(pepURL, protocol.ActivateRequest{
-		ClientPubKey: opened.ClientStaticPub,
-		ServiceID:    payload.ServiceID,
-		ClientInSPI:  payload.ClientInSPI,
-		ClientDHPub:  payload.ClientDHPub,
-		AEADSuites:   payload.AEADSuites,
+	logutil.Debugf("pdp", "activate PEP client=%s service=%s observed_client_outer_ip=%s", logutil.Short(opened.ClientStaticPub), payload.ServiceID, clientOuterIP)
+	activation, err := activatePEP(pepControlURL, protocol.ActivateRequest{
+		ClientPubKey:  opened.ClientStaticPub,
+		ClientOuterIP: clientOuterIP,
+		ServiceID:     payload.ServiceID,
+		ClientInSPI:   payload.ClientInSPI,
+		ClientDHPub:   payload.ClientDHPub,
+		AEADSuites:    payload.AEADSuites,
 	})
 	if err != nil {
 		log.Println("activate PEP:", err)
 		return
 	}
-	logutil.Debugf("pdp", "PEP activated pep_in_spi=%s pep_dh_pub=%s expires_at=%s", tunnel.PEPInSPI, logutil.Short(tunnel.PEPDHPub), tunnel.ExpiresAt)
+
+	tunnel := protocol.TunnelParams{
+		ServiceID:     activation.ServiceID,
+		ServiceIP:     activation.ServiceIP,
+		PEPAddress:    pepWANAddress,
+		PEPPort:       pepNATTPort,
+		ClientInnerIP: activation.ClientInnerIP,
+		ClientInSPI:   activation.ClientInSPI,
+		PEPInSPI:      activation.PEPInSPI,
+		PEPDHPub:      activation.PEPDHPub,
+		AEAD:          activation.AEAD,
+		SALifetime:    activation.SALifetime,
+		ExpiresAt:     activation.ExpiresAt,
+	}
+
+	logutil.Debugf("pdp", "PEP activated pep_in_spi=%s pep_dh_pub=%s expires_at=%s client_endpoint=%s:%d", tunnel.PEPInSPI, logutil.Short(tunnel.PEPDHPub), tunnel.ExpiresAt, tunnel.PEPAddress, tunnel.PEPPort)
 
 	resp := protocol.AccessResponse{
 		Authorized: true,
@@ -174,8 +216,8 @@ func fetchClient(pipURL, pubkey string) (protocol.ClientInfo, error) {
 	return c, err
 }
 
-func activatePEP(pepURL string, req protocol.ActivateRequest) (protocol.TunnelParams, error) {
-	var out protocol.TunnelParams
+func activatePEP(pepURL string, req protocol.ActivateRequest) (protocol.PEPActivationResponse, error) {
+	var out protocol.PEPActivationResponse
 	body, err := json.Marshal(req)
 	if err != nil {
 		return out, err
@@ -206,6 +248,18 @@ func getenv(k, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getenvInt(k string, fallback int) int {
+	v := getenv(k, "")
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
 }
 
 func mustLoadJSON[T any](path string) T {

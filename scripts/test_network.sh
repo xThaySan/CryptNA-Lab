@@ -6,15 +6,15 @@ docker exec cryptna-client ping -c 1 172.20.0.20 >/dev/null
 echo "OK"
 
 echo "[2] pdp -> pip"
-docker exec cryptna-pdp ping -c 1 172.20.0.30 >/dev/null
+docker exec cryptna-pdp ping -c 1 172.21.0.30 >/dev/null
 echo "OK"
 
 echo "[3] pdp -> pep"
-docker exec cryptna-pdp ping -c 1 172.20.0.40 >/dev/null
+docker exec cryptna-pdp ping -c 1 172.23.0.40 >/dev/null
 echo "OK"
 
-echo "[4] client -> pep data plane"
-docker exec cryptna-client ping -c 1 172.21.0.40 >/dev/null
+echo "[4] client -> pep WAN/NAT-T plane"
+docker exec cryptna-client ping -c 1 172.20.0.40 >/dev/null
 echo "OK"
 
 echo "[5] pep -> service"

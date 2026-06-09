@@ -49,8 +49,8 @@ func main() {
 	defer nattSocket.Close()
 	logutil.Infof("pep", "NAT-T ESP-in-UDP socket listening on :4500")
 
-	log.Fatal(http.ListenAndServe(":8080", nil))
 	logutil.Infof("pep", "listening on :8080")
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
 func activateHandler(w http.ResponseWriter, r *http.Request) {
@@ -64,7 +64,12 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	logutil.Debugf("pep", "activation request client=%s service=%s client_in_spi=%s client_dh_pub=%s aead=%v", logutil.Short(req.ClientPubKey), req.ServiceID, req.ClientInSPI, logutil.Short(req.ClientDHPub), req.AEADSuites)
+	logutil.Debugf("pep", "activation request client=%s service=%s client_outer_ip=%s client_in_spi=%s client_dh_pub=%s aead=%v", logutil.Short(req.ClientPubKey), req.ServiceID, req.ClientOuterIP, req.ClientInSPI, logutil.Short(req.ClientDHPub), req.AEADSuites)
+	if req.ClientOuterIP == "" {
+		logutil.Debugf("pep", "reject activation: missing client_outer_ip client=%s service=%s", logutil.Short(req.ClientPubKey), req.ServiceID)
+		http.Error(w, "missing client_outer_ip", http.StatusBadRequest)
+		return
+	}
 	if req.ClientInSPI == "" {
 		logutil.Debugf("pep", "reject activation: missing client_in_spi client=%s service=%s", logutil.Short(req.ClientPubKey), req.ServiceID)
 		http.Error(w, "missing client_in_spi", http.StatusBadRequest)
@@ -107,8 +112,12 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	reqID := allocateReqID()
 	clientInnerIP := allocateClientInnerIP()
-	clientOuterIP := getenv("CLIENT_OUTER_IP", getenv("CLIENT_DATA_IP", "172.21.0.10"))
-	pepOuterIP := getenv("PEP_OUTER_IP", getenv("PEP_DATA_IP", "172.21.0.40"))
+	clientOuterIP := req.ClientOuterIP
+	pepOuterIP := getenv("PEP_LOCAL_ENDPOINT_IP", "")
+	if pepOuterIP == "" {
+		http.Error(w, "missing PEP_LOCAL_ENDPOINT_IP", http.StatusInternalServerError)
+		return
+	}
 	serviceIP := getenv("SERVICE_IP", "172.22.0.50")
 	nattPort := getenvInt("NATT_PORT", 4500)
 
@@ -150,11 +159,9 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 	logutil.Debugf("pep", "stored session pep_in_spi=%s client_in_spi=%s reqid=%d client_inner_ip=%s sessions_count=%d", pepInSPI, req.ClientInSPI, reqID, clientInnerIP, len(sessions))
 	sessionsMu.Unlock()
 
-	resp := protocol.TunnelParams{
+	resp := protocol.PEPActivationResponse{
 		ServiceID:     req.ServiceID,
 		ServiceIP:     serviceIP,
-		PEPAddress:    pepOuterIP,
-		PEPPort:       nattPort,
 		ClientInSPI:   req.ClientInSPI,
 		PEPInSPI:      pepInSPI,
 		ClientInnerIP: clientInnerIP,

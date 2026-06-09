@@ -1,23 +1,39 @@
 x-debug-env: &debug-env
   CRYPTNA_DEBUG: ${CRYPTNA_DEBUG:-0}
+  XFRM_MODE: ${XFRM_MODE:-apply} # [dry-run; apply]
 
+x-client: &client-base
+  build:
+    context: .
+    dockerfile: client/Dockerfile
+  command: sh -c "/app/natt-listener -port 4500 & sleep infinity"
+  cap_add:
+    - NET_ADMIN
+  environment:
+    <<: *debug-env
+  volumes:
+    - ./client/config.json:/app/config.json:ro
+  
 services:
   client:
-    build:
-      context: .
-      dockerfile: client/Dockerfile
+    <<: *client-base
     container_name: cryptna-client
     networks:
-      control_net:
+      wan_net:
         ipv4_address: 172.20.0.10
-      data_net:
-        ipv4_address: 172.21.0.10
-    cap_add:
-      - NET_ADMIN
-    environment:
-      <<: *debug-env
-      XFRM_MODE: ${XFRM_MODE:-dry-run}
-      CLIENT_OUTER_IP: 172.21.0.10
+    volumes:
+      - ./client/config.json:/app/config.json:ro
+      - ./client/identities/client1.json:/app/identity.json:ro
+
+  client2:
+    <<: *client-base
+    container_name: cryptna-client-2
+    networks:
+      wan_net:
+        ipv4_address: 172.20.0.11
+    volumes:
+      - ./client/config.json:/app/config.json:ro
+      - ./client/identities/client2.json:/app/identity.json:ro
 
   pdp:
     build:
@@ -25,10 +41,18 @@ services:
       dockerfile: pdp/Dockerfile
     container_name: cryptna-pdp
     networks:
-      control_net:
+      wan_net:
         ipv4_address: 172.20.0.20
+      pdp_pip_net:
+        ipv4_address: 172.21.0.20
+      pdp_pep_net:
+        ipv4_address: 172.23.0.20
     environment:
       <<: *debug-env
+      PIP_URL: http://172.21.0.30:8080
+      PEP_CONTROL_URL: http://172.23.0.40:8080
+      PEP_WAN_ADDRESS: 172.20.0.40
+      PEP_NATT_PORT: 4500
 
   pip:
     build:
@@ -38,8 +62,8 @@ services:
     volumes:
       - pip_data:/data
     networks:
-      control_net:
-        ipv4_address: 172.20.0.30
+      pdp_pip_net:
+        ipv4_address: 172.21.0.30
     environment:
       <<: *debug-env
 
@@ -49,10 +73,10 @@ services:
       dockerfile: pep/Dockerfile
     container_name: cryptna-pep
     networks:
-      control_net:
+      wan_net:
         ipv4_address: 172.20.0.40
-      data_net:
-        ipv4_address: 172.21.0.40
+      pdp_pep_net:
+        ipv4_address: 172.23.0.40
       service_net:
         ipv4_address: 172.22.0.40
     cap_add:
@@ -61,9 +85,7 @@ services:
       net.ipv4.ip_forward: "1"
     environment:
       <<: *debug-env
-      XFRM_MODE: ${XFRM_MODE:-dry-run}
-      CLIENT_OUTER_IP: 172.21.0.10
-      PEP_OUTER_IP: 172.21.0.40
+      PEP_LOCAL_ENDPOINT_IP: 172.20.0.40
       SERVICE_IP: 172.22.0.50
       NATT_PORT: 4500
       XFRM_REQID_BASE: 1000
@@ -85,7 +107,7 @@ services:
     networks:
       service_net:
         ipv4_address: 172.22.0.50
-  
+
   spa-send:
     build:
       context: .
@@ -95,15 +117,18 @@ services:
     environment:
       <<: *debug-env
     networks:
-      control_net:
+      wan_net:
         ipv4_address: 172.20.0.60
+    volumes:
+      - ./client/config.json:/app/config.json:ro
+      - ./client/identities/test.json:/app/identity.json:ro
 
 networks:
-  control_net:
+  wan_net:
     ipam:
       config:
         - subnet: 172.20.0.0/24
-  data_net:
+  pdp_pip_net:
     ipam:
       config:
         - subnet: 172.21.0.0/24
@@ -111,6 +136,10 @@ networks:
     ipam:
       config:
         - subnet: 172.22.0.0/24
+  pdp_pep_net:
+    ipam:
+      config:
+        - subnet: 172.23.0.0/24
 
 volumes:
   pip_data:

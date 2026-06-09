@@ -6,5 +6,13 @@
       "svc-http"
     ],
     "revoked": false
+  },
+  {
+    "client_pubkey": "UV1uxBsc/dV04PSVmss7onALmZQEN7Vi1P0yPICyeyY=",
+    "psk": "slC4aMw0PhryzYLCUHXCtOojTTN8PY4TxOSdp4ZYOwc=",
+    "allowed_services": [
+      "svc-http"
+    ],
+    "revoked": false
   }
 ]

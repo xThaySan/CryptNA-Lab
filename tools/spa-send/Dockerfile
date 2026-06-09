@@ -27,6 +27,5 @@ FROM alpine:latest
 RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=build /src/tools/spa-send/spa-send /app/spa-send
-COPY client/config.json /app/config.json
-COPY client/identity.json /app/identity.json
+
 CMD ["sleep", "infinity"]

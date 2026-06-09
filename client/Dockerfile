@@ -38,6 +38,5 @@ RUN apk add --no-cache curl iproute2 tcpdump
 WORKDIR /app
 COPY --from=build /src/client/client /app/client
 COPY --from=build /src/tools/natt-listener/natt-listener /app/natt-listener
-COPY client/config.json /app/config.json
-COPY client/identity.json /app/identity.json
+
 CMD ["sh", "-c", "/app/natt-listener -port 4500 & sleep infinity"]

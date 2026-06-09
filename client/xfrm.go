@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -12,7 +13,6 @@ import (
 )
 
 func buildClientXFRMPlan(t protocol.TunnelParams, c2pKey, p2cKey string, reqID uint32) (protocol.XFRMPlan, error) {
-	clientOuterIP := getenv("CLIENT_OUTER_IP", getenv("CLIENT_DATA_IP", "172.21.0.10"))
 	if t.ServiceIP == "" {
 		return protocol.XFRMPlan{}, fmt.Errorf("missing service_ip in tunnel params")
 	}
@@ -25,6 +25,11 @@ func buildClientXFRMPlan(t protocol.TunnelParams, c2pKey, p2cKey string, reqID u
 	if t.PEPPort == 0 {
 		t.PEPPort = 4500
 	}
+	clientOuterIP, err := localIPForRemote(t.PEPAddress, t.PEPPort)
+	if err != nil {
+		return protocol.XFRMPlan{}, err
+	}
+	logutil.Debugf("client", "inferred local outer ip for PEP %s:%d as %s", t.PEPAddress, t.PEPPort, clientOuterIP)
 
 	return ipsecutil.BuildClientXFRMTunnelPlan(ipsecutil.TunnelPlanInput{
 		ClientOuterIP: clientOuterIP,
@@ -101,4 +106,22 @@ func getenv(k, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func localIPForRemote(host string, port int) (string, error) {
+	raddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", host, port))
+	if err != nil {
+		return "", err
+	}
+	conn, err := net.DialUDP("udp", nil, raddr)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	laddr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok || laddr.IP == nil {
+		return "", fmt.Errorf("could not infer local outer IP for %s:%d", host, port)
+	}
+	return laddr.IP.String(), nil
 }

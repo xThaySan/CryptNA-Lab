@@ -22,7 +22,6 @@ for i in $(seq 1 "$N"); do
   grep -q '"authorized": true' /tmp/cryptna-client-$i.out
   grep -q '"client_inner_ip"' /tmp/cryptna-client-$i.out
   grep -q '"service_ip"' /tmp/cryptna-client-$i.out
-  grep -q '"reqid"' /tmp/cryptna-client-$i.out
 done
 
 echo "[5] read PEP sessions"

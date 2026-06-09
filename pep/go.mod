@@ -5,6 +5,7 @@ go 1.23
 require (
 	cryptna-lab/common/cryptoutil v0.0.0
 	cryptna-lab/common/ipsecutil v0.0.0
+	cryptna-lab/common/nattutil v0.0.0
 	cryptna-lab/common/protocol v0.0.0
 )
 

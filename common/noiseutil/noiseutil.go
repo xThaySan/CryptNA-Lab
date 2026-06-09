@@ -18,8 +18,8 @@ import (
 
 const (
 	ProtocolName = "Noise_IKpsk1_25519_AESGCM_SHA256"
-	// CRYPTNA customizes the standard IK first message by encrypting
-	// timestamp_ms || client_static_pub in the slot where IK normally encrypts s.
+	// CRYPTNA keeps the IKpsk1 token order e, es, s, ss, psk.
+	// The encrypted s slot carries timestamp_ms || client_static_pub instead of only s.
 	NSTimestampLen = 8
 	NSClientPubLen = 32
 	NSPlainLen     = NSTimestampLen + NSClientPubLen
@@ -61,6 +61,17 @@ type OpenResult struct {
 	Payload         []byte
 	PacketHash      string
 	ResponseKey     []byte
+}
+
+type OpenHeaderResult struct {
+	ClientStaticPub string
+	TimestampMS     int64
+	PacketHash      string
+
+	pdpStaticPriv      []byte
+	clientStaticPubRaw []byte
+	nmCipher           []byte
+	ss                 *symmetricState
 }
 
 type symmetricState struct {
@@ -120,8 +131,8 @@ func BuildIKpsk1SPA(client ClientIdentity, pdpStaticPubB64 string, payload []byt
 	}
 
 	ss := newSymmetricState()
-	ss.mixHash(ePub)                              // e
-	if err := ss.mixKeyAndHash(psk); err != nil { // psk1
+	ss.mixHash(ePub)                        // e
+	if err := ss.mixKey(ePub); err != nil { // PSK-mode rule: MixKey(e.public_key) after every e
 		return BuildResult{}, err
 	}
 
@@ -150,6 +161,9 @@ func BuildIKpsk1SPA(client ClientIdentity, pdpStaticPubB64 string, payload []byt
 	if err := ss.mixKey(ssDH); err != nil { // ss
 		return BuildResult{}, err
 	}
+	if err := ss.mixKeyAndHash(psk); err != nil { // psk1: end of first message, before nm payload
+		return BuildResult{}, err
+	}
 
 	nmCipher, err := ss.encryptAndHash(payload)
 	if err != nil {
@@ -174,18 +188,14 @@ func BuildIKpsk1SPA(client ClientIdentity, pdpStaticPubB64 string, payload []byt
 	}, nil
 }
 
-func OpenIKpsk1SPA(packet []byte, pdp PDPIdentity, now time.Time, allowedSkew time.Duration) (OpenResult, error) {
+func OpenIKpsk1SPAHeader(packet []byte, pdp PDPIdentity, now time.Time, allowedSkew time.Duration) (OpenHeaderResult, error) {
 	if len(packet) < EPublicLen+NSCipherLen+NSTagLen || len(packet) > MaxSPAPacket {
-		return OpenResult{}, ErrInvalidPacket
+		return OpenHeaderResult{}, ErrInvalidPacket
 	}
 
 	pdpStaticPriv, err := decodeB64(pdp.PDPStaticPriv, 32)
 	if err != nil {
-		return OpenResult{}, err
-	}
-	psk, err := decodeB64(pdp.SPAPSK, 32)
-	if err != nil {
-		return OpenResult{}, err
+		return OpenHeaderResult{}, err
 	}
 
 	ePub := packet[:EPublicLen]
@@ -193,61 +203,92 @@ func OpenIKpsk1SPA(packet []byte, pdp PDPIdentity, now time.Time, allowedSkew ti
 	nmCipher := packet[EPublicLen+NSCipherLen:]
 
 	ss := newSymmetricState()
-	ss.mixHash(ePub)                              // e
-	if err := ss.mixKeyAndHash(psk); err != nil { // psk1
-		return OpenResult{}, err
+	ss.mixHash(ePub)                        // e
+	if err := ss.mixKey(ePub); err != nil { // PSK-mode rule: MixKey(e.public_key) after every e
+		return OpenHeaderResult{}, err
 	}
 
 	es, err := curve25519.X25519(pdpStaticPriv, ePub)
 	if err != nil {
-		return OpenResult{}, err
+		return OpenHeaderResult{}, err
 	}
 	if err := ss.mixKey(es); err != nil { // es
-		return OpenResult{}, err
+		return OpenHeaderResult{}, err
 	}
 
 	nsPlain, err := ss.decryptAndHash(nsCipher)
 	if err != nil {
-		return OpenResult{}, ErrDecryptFailed
+		return OpenHeaderResult{}, ErrDecryptFailed
 	}
 	if len(nsPlain) != NSPlainLen {
-		return OpenResult{}, ErrInvalidPacket
+		return OpenHeaderResult{}, ErrInvalidPacket
 	}
 
 	timestampMS := int64(binary.BigEndian.Uint64(nsPlain[:8]))
 	packetTime := time.UnixMilli(timestampMS)
 	if now.Sub(packetTime) > allowedSkew || packetTime.Sub(now) > allowedSkew {
-		return OpenResult{}, ErrInvalidTime
+		return OpenHeaderResult{}, ErrInvalidTime
 	}
 
 	clientStaticPub := make([]byte, 32)
 	copy(clientStaticPub, nsPlain[8:])
 
-	ssDH, err := curve25519.X25519(pdpStaticPriv, clientStaticPub)
+	return OpenHeaderResult{
+		ClientStaticPub:    base64.StdEncoding.EncodeToString(clientStaticPub),
+		TimestampMS:        timestampMS,
+		PacketHash:         PacketHash(packet),
+		pdpStaticPriv:      append([]byte{}, pdpStaticPriv...),
+		clientStaticPubRaw: clientStaticPub,
+		nmCipher:           append([]byte{}, nmCipher...),
+		ss:                 ss,
+	}, nil
+}
+
+func CompleteIKpsk1SPA(header OpenHeaderResult, pskB64 string) (OpenResult, error) {
+	psk, err := decodeB64(pskB64, 32)
 	if err != nil {
 		return OpenResult{}, err
 	}
-	if err := ss.mixKey(ssDH); err != nil { // ss
+	if header.ss == nil || len(header.pdpStaticPriv) != 32 || len(header.clientStaticPubRaw) != 32 {
+		return OpenResult{}, ErrInvalidPacket
+	}
+
+	ssDH, err := curve25519.X25519(header.pdpStaticPriv, header.clientStaticPubRaw)
+	if err != nil {
+		return OpenResult{}, err
+	}
+	if err := header.ss.mixKey(ssDH); err != nil { // ss
+		return OpenResult{}, err
+	}
+	if err := header.ss.mixKeyAndHash(psk); err != nil { // psk1: end of first message, before nm payload
 		return OpenResult{}, err
 	}
 
-	payload, err := ss.decryptAndHash(nmCipher)
+	payload, err := header.ss.decryptAndHash(header.nmCipher)
 	if err != nil {
 		return OpenResult{}, ErrDecryptFailed
 	}
 
-	_, responderToInitiator, err := ss.split()
+	_, responderToInitiator, err := header.ss.split()
 	if err != nil {
 		return OpenResult{}, err
 	}
 
 	return OpenResult{
-		ClientStaticPub: base64.StdEncoding.EncodeToString(clientStaticPub),
-		TimestampMS:     timestampMS,
+		ClientStaticPub: header.ClientStaticPub,
+		TimestampMS:     header.TimestampMS,
 		Payload:         payload,
-		PacketHash:      PacketHash(packet),
+		PacketHash:      header.PacketHash,
 		ResponseKey:     responderToInitiator,
 	}, nil
+}
+
+func OpenIKpsk1SPA(packet []byte, pdp PDPIdentity, now time.Time, allowedSkew time.Duration) (OpenResult, error) {
+	header, err := OpenIKpsk1SPAHeader(packet, pdp, now, allowedSkew)
+	if err != nil {
+		return OpenResult{}, err
+	}
+	return CompleteIKpsk1SPA(header, pdp.SPAPSK)
 }
 
 func EncryptResponse(key []byte, plaintext []byte) ([]byte, error) {
