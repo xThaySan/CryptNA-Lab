@@ -25,9 +25,18 @@ type ClientConfig struct {
 type ClientIdentity = noiseutil.ClientIdentity
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "gen-identity" {
-		genIdentity()
-		return
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "gen-identity":
+			genIdentity()
+			return
+		case "bench-handshake":
+			benchHandshake(os.Args[2:])
+			return
+		case "bench-handshake-rate":
+			benchHandshakeRate(os.Args[2:])
+			return
+		}
 	}
 
 	cfg := mustLoadJSON[ClientConfig]("/app/config.json")

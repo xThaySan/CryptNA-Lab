@@ -98,6 +98,8 @@ func main() {
 }
 
 func startHealthServer() {
+	registerSPAMetricHandlers()
+
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok\n"))
@@ -107,18 +109,22 @@ func startHealthServer() {
 
 func handleUDPPacket(conn *net.UDPConn, remote *net.UDPAddr, packet []byte, pipURL, pepControlURL, pepWANAddress string, pepNATTPort int, pdpID noiseutil.PDPIdentity, replays *replayCache) {
 	now := time.Now().UTC()
+	metricStart := time.Now()
+
 	packetHash := noiseutil.PacketHash(packet)
 	clientOuterIP := remote.IP.String()
 	logutil.Debugf("pdp", "udp packet from=%s observed_client_outer_ip=%s size=%d hash=%s", remote.String(), clientOuterIP, len(packet), packetHash)
 
 	if replays.Seen(packetHash, now) {
 		logutil.Debugf("pdp", "drop replay hash=%s", packetHash)
+		recordSPAMetric("replay", "drop", metricStart, len(packet), nil)
 		return
 	}
 
 	header, err := noiseutil.OpenIKpsk1SPAHeader(packet, pdpID, now, spaSkew)
 	if err != nil {
 		logutil.Debugf("pdp", "drop invalid SPA header from=%s err=%v", remote.String(), err)
+		recordSPAMetric("random", "drop_invalid_header", metricStart, len(packet), err)
 		return
 	}
 	logutil.Debugf("pdp", "SPA header opened client=%s timestamp_ms=%d hash=%s", logutil.Short(header.ClientStaticPub), header.TimestampMS, header.PacketHash)
@@ -127,12 +133,14 @@ func handleUDPPacket(conn *net.UDPConn, remote *net.UDPAddr, packet []byte, pipU
 	client, err := fetchClient(pipURL, header.ClientStaticPub)
 	if err != nil || client.Revoked {
 		logutil.Debugf("pdp", "drop unknown/revoked client=%s err=%v revoked=%v", logutil.Short(header.ClientStaticPub), err, client.Revoked)
+		recordSPAMetric("unknown_static_key", "drop_unknown_or_revoked", metricStart, len(packet), err)
 		return
 	}
 
 	opened, err := noiseutil.CompleteIKpsk1SPA(header, client.PSK)
 	if err != nil {
 		logutil.Debugf("pdp", "drop invalid SPA payload client=%s err=%v", logutil.Short(header.ClientStaticPub), err)
+		recordSPAMetric("wrong-psk", "drop_invalid_payload", metricStart, len(packet), err)
 		return
 	}
 	logutil.Debugf("pdp", "SPA opened client=%s timestamp_ms=%d payload_size=%d hash=%s", logutil.Short(opened.ClientStaticPub), opened.TimestampMS, len(opened.Payload), opened.PacketHash)
@@ -146,6 +154,7 @@ func handleUDPPacket(conn *net.UDPConn, remote *net.UDPAddr, packet []byte, pipU
 
 	if !contains(client.AllowedServices, payload.ServiceID) {
 		logutil.Debugf("pdp", "drop unauthorized client=%s service=%s", logutil.Short(opened.ClientStaticPub), payload.ServiceID)
+		recordSPAMetric("unauthorized", "drop_policy", metricStart, len(packet), nil)
 		return
 	}
 
@@ -160,6 +169,7 @@ func handleUDPPacket(conn *net.UDPConn, remote *net.UDPAddr, packet []byte, pipU
 	})
 	if err != nil {
 		log.Println("activate PEP:", err)
+		recordSPAMetric("valid", "activation_error", metricStart, len(packet), err)
 		return
 	}
 
@@ -199,7 +209,10 @@ func handleUDPPacket(conn *net.UDPConn, remote *net.UDPAddr, packet []byte, pipU
 	logutil.Debugf("pdp", "sending encrypted response to=%s size=%d", remote.String(), len(cipherResp))
 	if _, err := conn.WriteToUDP(cipherResp, remote); err != nil {
 		log.Println("udp write:", err)
+		recordSPAMetric("valid", "write_error", metricStart, len(packet), err)
 	}
+
+	recordSPAMetric("valid", "authorized", metricStart, len(packet), nil)
 }
 
 func fetchClient(pipURL, pubkey string) (protocol.ClientInfo, error) {
