@@ -199,6 +199,11 @@ func benchmarkHandshakeOnce(cfg ClientConfig, id ClientIdentity) (benchmarkHands
 		return result, nil
 	}
 
+	if err := verifyTunnelAttestation(cfg, id, payload, *out.Tunnel); err != nil {
+		result.Duration = time.Since(start)
+		return result, fmt.Errorf("attested PEP verification failed: %w", err)
+	}
+
 	shared, err := cryptoutil.DeriveSharedSecretB64(eph.PrivateB64, out.Tunnel.PEPDHPub)
 	if err != nil {
 		result.Duration = time.Since(start)

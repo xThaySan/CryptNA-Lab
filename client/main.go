@@ -16,10 +16,13 @@ import (
 )
 
 type ClientConfig struct {
-	PDPUDPAddr   string   `json:"pdp_udp_addr"`
-	PDPStaticPub string   `json:"pdp_static_pub"`
-	ServiceID    string   `json:"service_id"`
-	AEADSuites   []string `json:"aead_suites"`
+	PDPUDPAddr          string   `json:"pdp_udp_addr"`
+	PDPStaticPub        string   `json:"pdp_static_pub"`
+	ServiceID           string   `json:"service_id"`
+	AEADSuites          []string `json:"aead_suites"`
+	VerifierPubKey      string   `json:"verifier_pubkey,omitempty"`
+	ExpectedPolicyHash  string   `json:"expected_policy_hash,omitempty"`
+	AttestationRequired bool     `json:"attestation_required,omitempty"`
 }
 
 type ClientIdentity = noiseutil.ClientIdentity
@@ -110,6 +113,12 @@ func main() {
 	var out protocol.AccessResponse
 	if err := json.Unmarshal(plainResp, &out); err != nil {
 		log.Fatal(err)
+	}
+
+	if out.Authorized && out.Tunnel != nil {
+		if err := verifyTunnelAttestation(cfg, id, payload, *out.Tunnel); err != nil {
+			log.Fatalf("attested PEP verification failed: %v", err)
+		}
 	}
 
 	pretty, _ := json.MarshalIndent(out, "", "  ")

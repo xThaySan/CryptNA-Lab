@@ -28,6 +28,7 @@ var (
 
 func main() {
 	initAllocators()
+	initAttestation()
 	go sessionReaper()
 
 	if err := setupPEPFirewall(); err != nil {
@@ -122,6 +123,22 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 	nattPort := getenvInt("NATT_PORT", 4500)
 
 	lifetime := getenvInt("SA_LIFETIME_SECONDS", 60)
+	var capacityToken *protocol.CapacityToken
+	if pepAttestation != nil && pepAttestation.enabled {
+		tok, err := pepAttestation.ensureCapacityToken()
+		if err != nil {
+			log.Printf("capacity token unavailable: %v", err)
+			http.Error(w, "capacity token unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		lifetime, err = pepAttestation.boundLifetime(lifetime, tok)
+		if err != nil {
+			log.Printf("capacity token lifetime invalid: %v", err)
+			http.Error(w, "capacity token lifetime invalid", http.StatusServiceUnavailable)
+			return
+		}
+		capacityToken = &tok
+	}
 	expiresAt := time.Now().Add(time.Duration(lifetime) * time.Second).UTC().Format(time.RFC3339)
 
 	session := protocol.Session{
@@ -143,6 +160,28 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt:     expiresAt,
 	}
 
+	resp := protocol.PEPActivationResponse{
+		ServiceID:     req.ServiceID,
+		ServiceIP:     serviceIP,
+		ClientInSPI:   req.ClientInSPI,
+		PEPInSPI:      pepInSPI,
+		ClientInnerIP: clientInnerIP,
+		PEPDHPub:      pepDH.PublicB64,
+		AEAD:          aead,
+		SALifetime:    lifetime,
+		ExpiresAt:     expiresAt,
+	}
+	if capacityToken != nil {
+		binding, err := pepAttestation.signSABinding(req, session, resp, *capacityToken)
+		if err != nil {
+			log.Printf("SA binding signature failed: %v", err)
+			http.Error(w, "SA binding signature failed", http.StatusInternalServerError)
+			return
+		}
+		resp.CapacityToken = capacityToken
+		resp.SABinding = &binding
+	}
+
 	session.XFRM, err = buildXFRMPlan(session)
 	if err != nil {
 		http.Error(w, "xfrm plan failed", http.StatusInternalServerError)
@@ -159,19 +198,7 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 	logutil.Debugf("pep", "stored session pep_in_spi=%s client_in_spi=%s reqid=%d client_inner_ip=%s sessions_count=%d", pepInSPI, req.ClientInSPI, reqID, clientInnerIP, len(sessions))
 	sessionsMu.Unlock()
 
-	resp := protocol.PEPActivationResponse{
-		ServiceID:     req.ServiceID,
-		ServiceIP:     serviceIP,
-		ClientInSPI:   req.ClientInSPI,
-		PEPInSPI:      pepInSPI,
-		ClientInnerIP: clientInnerIP,
-		PEPDHPub:      pepDH.PublicB64,
-		AEAD:          aead,
-		SALifetime:    lifetime,
-		ExpiresAt:     expiresAt,
-	}
-
-	logutil.Infof("pep", "activated service=%s client=%s pep_in_spi=%s client_in_spi=%s reqid=%d", req.ServiceID, logutil.Short(req.ClientPubKey), pepInSPI, req.ClientInSPI, reqID)
+	logutil.Infof("pep", "activated service=%s client=%s pep_in_spi=%s client_in_spi=%s reqid=%d attested=%v", req.ServiceID, logutil.Short(req.ClientPubKey), pepInSPI, req.ClientInSPI, reqID, resp.CapacityToken != nil)
 	writeJSON(w, resp)
 }
 

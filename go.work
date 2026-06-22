@@ -11,6 +11,8 @@ use (
 	./common/logutil
 	./common/ipsecutil
 	./common/nattutil
+	./common/attest
 	./tools/spa-send
 	./tools/natt-listener
+	./verifier
 )

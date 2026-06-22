@@ -185,6 +185,8 @@ func handleUDPPacket(conn *net.UDPConn, remote *net.UDPAddr, packet []byte, pipU
 		AEAD:          activation.AEAD,
 		SALifetime:    activation.SALifetime,
 		ExpiresAt:     activation.ExpiresAt,
+		CapacityToken: activation.CapacityToken,
+		SABinding:     activation.SABinding,
 	}
 
 	logutil.Debugf("pdp", "PEP activated pep_in_spi=%s pep_dh_pub=%s expires_at=%s client_endpoint=%s:%d", tunnel.PEPInSPI, logutil.Short(tunnel.PEPDHPub), tunnel.ExpiresAt, tunnel.PEPAddress, tunnel.PEPPort)
@@ -210,6 +212,7 @@ func handleUDPPacket(conn *net.UDPConn, remote *net.UDPAddr, packet []byte, pipU
 	if _, err := conn.WriteToUDP(cipherResp, remote); err != nil {
 		log.Println("udp write:", err)
 		recordSPAMetric("valid", "write_error", metricStart, len(packet), err)
+		return
 	}
 
 	recordSPAMetric("valid", "authorized", metricStart, len(packet), nil)

@@ -9,6 +9,54 @@ type AccessPayload struct {
 	AEADSuites  []string `json:"aead_suites"`
 }
 
+// CapacityRequest is sent by the PEP to the Verifier to obtain a short-lived
+// attested capability binding a temporary PEP signing key to an attested PEP state.
+type CapacityRequest struct {
+	PEPID            string   `json:"pep_id"`
+	PEPSigningPubKey string   `json:"pep_signing_pubkey"`
+	Measurement      string   `json:"measurement"`
+	PolicyHash       string   `json:"policy_hash"`
+	Scope            []string `json:"scope"`
+	MaxSALifetime    int      `json:"max_sa_lifetime_seconds"`
+}
+
+// CapacityToken is signed by the Verifier. It authorizes the PEP to sign concrete
+// SA bindings with PEPSigningPubKey for a bounded scope and time window.
+type CapacityToken struct {
+	Version          int      `json:"version"`
+	TokenType        string   `json:"token_type"`
+	VerifierID       string   `json:"verifier_id"`
+	PEPID            string   `json:"pep_id"`
+	PEPSigningPubKey string   `json:"pep_signing_pubkey"`
+	Measurement      string   `json:"measurement"`
+	PolicyHash       string   `json:"policy_hash"`
+	Scope            []string `json:"scope"`
+	IssuedAt         string   `json:"iat"`
+	ExpiresAt        string   `json:"exp"`
+	MaxSALifetime    int      `json:"max_sa_lifetime_seconds"`
+	Signature        string   `json:"verifier_signature"`
+}
+
+// SABinding is signed by the attested PEP key referenced in CapacityToken.
+// The client verifies this before installing local XFRM state.
+type SABinding struct {
+	Version       int    `json:"version"`
+	TokenHash     string `json:"token_hash"`
+	PEPID         string `json:"pep_id"`
+	ClientPubKey  string `json:"client_pubkey"`
+	ServiceID     string `json:"service_id"`
+	ServiceIP     string `json:"service_ip"`
+	ClientInnerIP string `json:"client_inner_ip"`
+	ClientInSPI   string `json:"client_in_spi"`
+	PEPInSPI      string `json:"pep_in_spi"`
+	ClientDHPub   string `json:"client_dh_pub"`
+	PEPDHPub      string `json:"pep_dh_pub"`
+	AEAD          string `json:"aead"`
+	SALifetime    int    `json:"sa_lifetime_seconds"`
+	ExpiresAt     string `json:"expires_at"`
+	Signature     string `json:"pep_signature"`
+}
+
 // ActivateRequest is sent by the PDP to the PEP after SPA validation and policy authorization.
 type ActivateRequest struct {
 	ClientPubKey string `json:"client_pubkey"`
@@ -42,6 +90,9 @@ type PEPActivationResponse struct {
 	AEAD       string `json:"aead"`
 	SALifetime int    `json:"sa_lifetime_seconds"`
 	ExpiresAt  string `json:"expires_at"`
+
+	CapacityToken *CapacityToken `json:"capacity_token,omitempty"`
+	SABinding     *SABinding     `json:"sa_binding,omitempty"`
 }
 
 // TunnelParams are returned by the PDP to the client after PEP activation.
@@ -62,6 +113,9 @@ type TunnelParams struct {
 	AEAD       string `json:"aead"`
 	SALifetime int    `json:"sa_lifetime_seconds"`
 	ExpiresAt  string `json:"expires_at"`
+
+	CapacityToken *CapacityToken `json:"capacity_token,omitempty"`
+	SABinding     *SABinding     `json:"sa_binding,omitempty"`
 }
 
 type ClientInfo struct {

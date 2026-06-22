@@ -4,5 +4,8 @@
   "service_id": "svc-http",
   "aead_suites": [
     "aes-gcm-128"
-  ]
+  ],
+  "verifier_pubkey": "wOtWIxwBDPM5duRETS3SkWZJOCu70G4AsS/NugQCl9U=",
+  "attestation_required": false,
+  "expected_policy_hash": "cryptna-lab-policy-v1"
 }

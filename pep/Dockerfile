@@ -4,6 +4,7 @@ WORKDIR /src
 COPY common/cryptoutil ./common/cryptoutil
 COPY common/ipsecutil ./common/ipsecutil
 COPY common/protocol ./common/protocol
+COPY common/attest ./common/attest
 COPY common/logutil ./common/logutil
 COPY common/nattutil ./common/nattutil
 COPY pep ./pep
@@ -16,6 +17,7 @@ use (
 	./common/cryptoutil
 	./common/ipsecutil
 	./common/protocol
+	./common/attest
 	./common/logutil
 	./common/nattutil
 )

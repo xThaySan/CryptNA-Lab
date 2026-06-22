@@ -3,6 +3,7 @@ module cryptna-lab/client
 go 1.23
 
 require (
+	cryptna-lab/common/attest v0.0.0
 	cryptna-lab/common/cryptoutil v0.0.0
 	cryptna-lab/common/ipsecutil v0.0.0
 	cryptna-lab/common/noiseutil v0.0.0
@@ -23,3 +24,5 @@ replace cryptna-lab/common/protocol => ../common/protocol
 replace cryptna-lab/common/logutil => ../common/logutil
 
 replace cryptna-lab/common/ipsecutil => ../common/ipsecutil
+
+replace cryptna-lab/common/attest => ../common/attest

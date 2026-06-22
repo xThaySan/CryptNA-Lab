@@ -5,6 +5,7 @@ COPY common/cryptoutil ./common/cryptoutil
 COPY common/ipsecutil ./common/ipsecutil
 COPY common/noiseutil ./common/noiseutil
 COPY common/protocol ./common/protocol
+COPY common/attest ./common/attest
 COPY common/logutil ./common/logutil
 COPY common/nattutil ./common/nattutil
 COPY tools/natt-listener ./tools/natt-listener
@@ -19,6 +20,7 @@ use (
 	./common/ipsecutil
 	./common/noiseutil
 	./common/protocol
+	./common/attest
 	./common/logutil
 	./common/nattutil
 	./tools/natt-listener
