@@ -28,6 +28,9 @@ func verifyTunnelAttestation(cfg ClientConfig, id ClientIdentity, payload protoc
 	if cfg.ExpectedPolicyHash != "" && tunnel.CapacityToken.PolicyHash != cfg.ExpectedPolicyHash {
 		return fmt.Errorf("policy_hash mismatch expected=%s token=%s", cfg.ExpectedPolicyHash, tunnel.CapacityToken.PolicyHash)
 	}
+	if tunnel.CapacityToken.CheckpointHash == "" || tunnel.CapacityToken.HistoryEpoch == 0 {
+		return fmt.Errorf("capacity token is not bound to an enforcement history checkpoint")
+	}
 	if payload.ServiceID != tunnel.ServiceID {
 		return fmt.Errorf("service mismatch payload=%s tunnel=%s", payload.ServiceID, tunnel.ServiceID)
 	}

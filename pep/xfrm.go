@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os/exec"
+	"strings"
 
 	"cryptna-lab/common/ipsecutil"
 	"cryptna-lab/common/logutil"
@@ -62,4 +63,63 @@ func maybeDeleteXFRM(x protocol.XFRMPlan) error {
 	}
 
 	return nil
+}
+
+func observeXFRMApplied(s protocol.Session) map[string]string {
+	mode := getenv("XFRM_MODE", "dry-run")
+	out := map[string]string{
+		"xfrm_mode":      mode,
+		"xfrm_plan_hash": xfrmPlanHash(s.XFRM),
+	}
+	if mode != "apply" {
+		out["observation"] = "dry-run-no-kernel-observation"
+		out["applied"] = "assumed"
+		return out
+	}
+	state, stateErr := exec.Command("sh", "-c", "ip xfrm state").CombinedOutput()
+	policy, policyErr := exec.Command("sh", "-c", "ip xfrm policy").CombinedOutput()
+	stateText := string(state)
+	policyText := string(policy)
+	if stateErr != nil {
+		out["state_error"] = stateErr.Error()
+	}
+	if policyErr != nil {
+		out["policy_error"] = policyErr.Error()
+	}
+	out["pep_in_spi_present"] = fmt.Sprintf("%t", strings.Contains(stateText, s.PEPInSPI))
+	out["client_in_spi_present"] = fmt.Sprintf("%t", strings.Contains(stateText, s.ClientInSPI))
+	out["fwd_policy_present"] = fmt.Sprintf("%t", strings.Contains(policyText, s.ClientInnerIP) && strings.Contains(policyText, s.ServiceIP))
+	out["applied"] = fmt.Sprintf("%t", stateErr == nil && policyErr == nil && strings.Contains(stateText, s.PEPInSPI) && strings.Contains(stateText, s.ClientInSPI) && strings.Contains(policyText, s.ClientInnerIP) && strings.Contains(policyText, s.ServiceIP))
+	return out
+}
+
+func observeXFRMDeleted(s protocol.Session) map[string]string {
+	mode := getenv("XFRM_MODE", "dry-run")
+	out := map[string]string{
+		"xfrm_mode":      mode,
+		"xfrm_plan_hash": xfrmPlanHash(s.XFRM),
+	}
+	if mode != "apply" {
+		out["observation"] = "dry-run-no-kernel-observation"
+		out["deleted"] = "assumed"
+		return out
+	}
+	state, stateErr := exec.Command("sh", "-c", "ip xfrm state").CombinedOutput()
+	policy, policyErr := exec.Command("sh", "-c", "ip xfrm policy").CombinedOutput()
+	stateText := string(state)
+	policyText := string(policy)
+	if stateErr != nil {
+		out["state_error"] = stateErr.Error()
+	}
+	if policyErr != nil {
+		out["policy_error"] = policyErr.Error()
+	}
+	pepPresent := strings.Contains(stateText, s.PEPInSPI)
+	clientPresent := strings.Contains(stateText, s.ClientInSPI)
+	policyPresent := strings.Contains(policyText, s.ClientInnerIP) && strings.Contains(policyText, s.ServiceIP)
+	out["pep_in_spi_present"] = fmt.Sprintf("%t", pepPresent)
+	out["client_in_spi_present"] = fmt.Sprintf("%t", clientPresent)
+	out["policy_present"] = fmt.Sprintf("%t", policyPresent)
+	out["deleted"] = fmt.Sprintf("%t", stateErr == nil && policyErr == nil && !pepPresent && !clientPresent && !policyPresent)
+	return out
 }

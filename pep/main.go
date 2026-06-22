@@ -187,16 +187,27 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "xfrm plan failed", http.StatusInternalServerError)
 		return
 	}
+	historyTransactionMu.Lock()
+	historyAppend(eventXFRMApplyIntent, &session, map[string]string{
+		"xfrm_mode":      getenv("XFRM_MODE", "dry-run"),
+		"xfrm_plan_hash": xfrmPlanHash(session.XFRM),
+	})
 	if err := maybeApplyXFRM(session.XFRM); err != nil {
+		historyTransactionMu.Unlock()
 		log.Printf("xfrm apply failed: %v", err)
 		http.Error(w, "xfrm apply failed", http.StatusInternalServerError)
 		return
 	}
+	historyAppend(eventXFRMApplyObserved, &session, observeXFRMApplied(session))
 
 	sessionsMu.Lock()
 	sessions[pepInSPI] = session
 	logutil.Debugf("pep", "stored session pep_in_spi=%s client_in_spi=%s reqid=%d client_inner_ip=%s sessions_count=%d", pepInSPI, req.ClientInSPI, reqID, clientInnerIP, len(sessions))
 	sessionsMu.Unlock()
+	historyAppend(eventSessionActivated, &session, map[string]string{
+		"attested": fmt.Sprintf("%t", resp.CapacityToken != nil),
+	})
+	historyTransactionMu.Unlock()
 
 	logutil.Infof("pep", "activated service=%s client=%s pep_in_spi=%s client_in_spi=%s reqid=%d attested=%v", req.ServiceID, logutil.Short(req.ClientPubKey), pepInSPI, req.ClientInSPI, reqID, resp.CapacityToken != nil)
 	writeJSON(w, resp)
@@ -250,6 +261,17 @@ func sessionReaper() {
 }
 
 func cleanupExpiredSessions(now time.Time) {
+	historyTransactionMu.Lock()
+	defer historyTransactionMu.Unlock()
+	cleanupExpiredSessionsUnderHistoryLock(now)
+}
+
+// cleanupExpiredSessionsUnderHistoryLock removes expired sessions and records the
+// full expiration/delete observation sequence. The caller must hold
+// historyTransactionMu. This is also used immediately before capacity renewal so a
+// checkpoint cannot be accepted while an expired XFRM state is still pending
+// deletion in the local session table.
+func cleanupExpiredSessionsUnderHistoryLock(now time.Time) {
 	expired := make([]protocol.Session, 0)
 
 	sessionsMu.Lock()
@@ -278,9 +300,17 @@ func cleanupExpiredSessions(now time.Time) {
 			session.ReqID,
 		)
 
+		historyAppend(eventSessionExpired, &session, map[string]string{
+			"expires_at": session.ExpiresAt,
+		})
+		historyAppend(eventXFRMDeleteIntent, &session, map[string]string{
+			"xfrm_mode":      getenv("XFRM_MODE", "dry-run"),
+			"xfrm_plan_hash": xfrmPlanHash(session.XFRM),
+		})
 		if err := maybeDeleteXFRM(session.XFRM); err != nil {
 			log.Printf("xfrm delete failed: %v", err)
 		}
+		historyAppend(eventXFRMDeleteObserved, &session, observeXFRMDeleted(session))
 	}
 }
 

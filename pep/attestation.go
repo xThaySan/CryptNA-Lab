@@ -59,6 +59,13 @@ func initAttestation() {
 
 	log.Printf("[pep] attestation enabled pep_id=%s verifier=%s scope=%v measurement=%s policy_hash=%s max_sa_lifetime=%d", pepAttestation.pepID, pepAttestation.verifierURL, pepAttestation.scope, pepAttestation.measurement, pepAttestation.policyHash, pepAttestation.maxSALifetime)
 
+	enforcementHistory = NewEnforcementHistory(pepAttestation.pepID)
+	historyAppend(eventPEPStart, nil, map[string]string{
+		"measurement":  pepAttestation.measurement,
+		"policy_hash":  pepAttestation.policyHash,
+		"history_mode": "hash-chain-xfrm-observation",
+	})
+
 	var lastErr error
 	for i := 0; i < 20; i++ {
 		if _, err := pepAttestation.ensureCapacityToken(); err == nil {
@@ -116,6 +123,21 @@ func (s *pepAttestationState) ensureCapacityToken() (protocol.CapacityToken, err
 		}
 	}
 
+	historyTransactionMu.Lock()
+	defer historyTransactionMu.Unlock()
+
+	// Before submitting a checkpoint, drain any expired sessions. Otherwise, a
+	// capacity refresh can race with the session reaper and get accepted while an
+	// expired XFRM state has not yet produced its delete events.
+	cleanupExpiredSessionsUnderHistoryLock(time.Now().UTC())
+
+	historyAppend(eventCapacityRequested, nil, map[string]string{
+		"scope": strings.Join(s.scope, ","),
+	})
+	historyEvidence, err := enforcementHistory.BuildEvidence(s.key.PrivateKey)
+	if err != nil {
+		return protocol.CapacityToken{}, err
+	}
 	req := protocol.CapacityRequest{
 		PEPID:            s.pepID,
 		PEPSigningPubKey: s.key.PublicKey,
@@ -123,6 +145,7 @@ func (s *pepAttestationState) ensureCapacityToken() (protocol.CapacityToken, err
 		PolicyHash:       s.policyHash,
 		Scope:            append([]string{}, s.scope...),
 		MaxSALifetime:    s.maxSALifetime,
+		History:          &historyEvidence,
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -140,6 +163,20 @@ func (s *pepAttestationState) ensureCapacityToken() (protocol.CapacityToken, err
 	if err := json.NewDecoder(resp.Body).Decode(&tok); err != nil {
 		return protocol.CapacityToken{}, err
 	}
+	checkpointHash, err := attest.HashEnforcementCheckpoint(historyEvidence.Checkpoint)
+	if err != nil {
+		return protocol.CapacityToken{}, err
+	}
+	if tok.CheckpointHash != "" && tok.CheckpointHash != checkpointHash {
+		return protocol.CapacityToken{}, fmt.Errorf("verifier token checkpoint hash mismatch")
+	}
+	if err := enforcementHistory.MarkCheckpointAccepted(historyEvidence.Checkpoint); err != nil {
+		return protocol.CapacityToken{}, err
+	}
+	historyAppend(eventCapacityAccepted, nil, map[string]string{
+		"checkpoint_hash": checkpointHash,
+		"history_epoch":   fmt.Sprintf("%d", historyEvidence.Checkpoint.Epoch),
+	})
 	s.token = &tok
 	return tok, nil
 }

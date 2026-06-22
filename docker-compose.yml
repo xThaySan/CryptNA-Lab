@@ -72,6 +72,8 @@ services:
       context: .
       dockerfile: verifier/Dockerfile
     container_name: cryptna-verifier
+    volumes:
+      - verifier_data:/data
     networks:
       pdp_pep_net:
         ipv4_address: 172.23.0.50
@@ -80,6 +82,9 @@ services:
       VERIFIER_EXPECTED_MEASUREMENT: cryptna-lab-pep-measurement-v1
       VERIFIER_EXPECTED_POLICY_HASH: cryptna-lab-policy-v1
       VERIFIER_TOKEN_TTL_SECONDS: ${VERIFIER_TOKEN_TTL_SECONDS:-120}
+      VERIFIER_ALLOWED_SCOPE: ${VERIFIER_ALLOWED_SCOPE:-svc-http}
+      VERIFIER_MAX_SA_LIFETIME_SECONDS: ${VERIFIER_MAX_SA_LIFETIME_SECONDS:-60}
+      VERIFIER_STATE_PATH: /data/state.json
 
   pep:
     build:
@@ -164,3 +169,4 @@ networks:
 
 volumes:
   pip_data:
+  verifier_data:
