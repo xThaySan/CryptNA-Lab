@@ -1,0 +1,35 @@
+# Optional overlay for kernel-side XFRM observation with eBPF/bpftrace.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.ebpf.yml build pep
+#   XFRM_MODE=apply docker compose -f docker-compose.yml -f docker-compose.ebpf.yml up
+#
+# This overlay intentionally does not affect the default lab. It grants the PEP
+# container the privileges and kernel mounts generally needed by bpftrace.
+services:
+  pep:
+    build:
+      args:
+        INSTALL_BPFTRACE: "1"
+    privileged: true
+    cap_add:
+      - SYS_ADMIN
+      - SYS_RESOURCE
+      - NET_ADMIN
+      - BPF
+      - PERFMON
+    security_opt:
+      - seccomp:unconfined
+      - apparmor:unconfined
+    environment:
+      XFRM_OBSERVER: ${XFRM_OBSERVER:-hybrid}
+      XFRM_EBPF_STRICT: ${XFRM_EBPF_STRICT:-0}
+      XFRM_EBPF_LOG_EVENTS: ${XFRM_EBPF_LOG_EVENTS:-0}
+      XFRM_EBPF_MIN_APPLY_EVENTS: ${XFRM_EBPF_MIN_APPLY_EVENTS:-2}
+      XFRM_EBPF_MIN_DELETE_EVENTS: ${XFRM_EBPF_MIN_DELETE_EVENTS:-2}
+      XFRM_EBPF_COMMAND: /app/ebpf/xfrm_monitor.sh
+    volumes:
+      - /sys/kernel/debug:/sys/kernel/debug:rw
+      - /sys/kernel/tracing:/sys/kernel/tracing:rw
+      - /sys/fs/bpf:/sys/fs/bpf:rw
+      - /sys/kernel/btf:/sys/kernel/btf:ro
+      - /lib/modules:/lib/modules:ro

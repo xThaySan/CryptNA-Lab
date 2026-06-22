@@ -29,6 +29,8 @@ var (
 func main() {
 	initAllocators()
 	initAttestation()
+	initXFRMObserver()
+	defer shutdownXFRMObserver()
 	go sessionReaper()
 
 	if err := setupPEPFirewall(); err != nil {
@@ -192,13 +194,14 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 		"xfrm_mode":      getenv("XFRM_MODE", "dry-run"),
 		"xfrm_plan_hash": xfrmPlanHash(session.XFRM),
 	})
+	applyObservationMark := markXFRMObservationPoint()
 	if err := maybeApplyXFRM(session.XFRM); err != nil {
 		historyTransactionMu.Unlock()
 		log.Printf("xfrm apply failed: %v", err)
 		http.Error(w, "xfrm apply failed", http.StatusInternalServerError)
 		return
 	}
-	historyAppend(eventXFRMApplyObserved, &session, observeXFRMApplied(session))
+	historyAppend(eventXFRMApplyObserved, &session, observeXFRMAppliedWithObserver(session, applyObservationMark))
 
 	sessionsMu.Lock()
 	sessions[pepInSPI] = session
@@ -307,10 +310,11 @@ func cleanupExpiredSessionsUnderHistoryLock(now time.Time) {
 			"xfrm_mode":      getenv("XFRM_MODE", "dry-run"),
 			"xfrm_plan_hash": xfrmPlanHash(session.XFRM),
 		})
+		deleteObservationMark := markXFRMObservationPoint()
 		if err := maybeDeleteXFRM(session.XFRM); err != nil {
 			log.Printf("xfrm delete failed: %v", err)
 		}
-		historyAppend(eventXFRMDeleteObserved, &session, observeXFRMDeleted(session))
+		historyAppend(eventXFRMDeleteObserved, &session, observeXFRMDeletedWithObserver(session, deleteObservationMark))
 	}
 }
 

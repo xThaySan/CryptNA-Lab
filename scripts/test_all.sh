@@ -6,6 +6,11 @@ chmod +x scripts/*.sh
 echo "=== CRYPTNA full test suite ==="
 
 echo
+echo "[0] History-bound unit tests"
+./scripts/test_history_hash_chain_unit.sh
+./scripts/test_history_negative_unit.sh
+
+echo
 echo "[1] SPA nominal"
 ./scripts/test_spa.sh
 

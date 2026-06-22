@@ -28,7 +28,10 @@ RUN go mod download
 RUN go build -o pep .
 
 FROM alpine:latest
-RUN apk add --no-cache curl iproute2 tcpdump iptables
+ARG INSTALL_BPFTRACE=0
+RUN apk add --no-cache curl iproute2 tcpdump iptables \
+    && if [ "$INSTALL_BPFTRACE" = "1" ]; then apk add --no-cache bpftrace; fi
 WORKDIR /app
 COPY --from=build /src/pep/pep /app/pep
+COPY pep/ebpf /app/ebpf
 CMD ["/app/pep"]

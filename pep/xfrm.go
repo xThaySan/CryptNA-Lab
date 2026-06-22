@@ -65,7 +65,7 @@ func maybeDeleteXFRM(x protocol.XFRMPlan) error {
 	return nil
 }
 
-func observeXFRMApplied(s protocol.Session) map[string]string {
+func observeXFRMAppliedPosthoc(s protocol.Session) map[string]string {
 	mode := getenv("XFRM_MODE", "dry-run")
 	out := map[string]string{
 		"xfrm_mode":      mode,
@@ -93,7 +93,7 @@ func observeXFRMApplied(s protocol.Session) map[string]string {
 	return out
 }
 
-func observeXFRMDeleted(s protocol.Session) map[string]string {
+func observeXFRMDeletedPosthoc(s protocol.Session) map[string]string {
 	mode := getenv("XFRM_MODE", "dry-run")
 	out := map[string]string{
 		"xfrm_mode":      mode,

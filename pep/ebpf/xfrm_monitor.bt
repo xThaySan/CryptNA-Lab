@@ -1,0 +1,22 @@
+#!/usr/bin/env bpftrace
+
+BEGIN
+{
+  printf("cryptna_ebpf_ready monitor=xfrm mode=static-reference\n");
+}
+
+/*
+ * Reference static monitor. The default /app/ebpf/xfrm_monitor.sh script now
+ * generates a kernel-specific bpftrace program that only attaches to selected
+ * XFRM apply/delete functions available on the host. Keep this file as a small
+ * fallback for manual debugging.
+ */
+kprobe:xfrm_state_add
+{
+  printf("cryptna_xfrm_event probe=kprobe:xfrm_state_add action=apply\n");
+}
+
+kprobe:xfrm_policy_insert
+{
+  printf("cryptna_xfrm_event probe=kprobe:xfrm_policy_insert action=apply\n");
+}

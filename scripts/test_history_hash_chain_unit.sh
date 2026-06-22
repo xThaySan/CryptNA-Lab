@@ -2,6 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+
 (cd common/attest && go test ./...)
 (cd verifier && go test ./...)
 
