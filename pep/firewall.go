@@ -14,7 +14,7 @@ func setupPEPFirewall() error {
 		return nil
 	}
 
-	clientCIDR := getenv("CLIENT_TUNNEL_CIDR", "10.200.0.0/24")
+	clientCIDR := getenv("CLIENT_TUNNEL_CIDR", "10.200.0.0/16")
 	serviceIP := getenv("SERVICE_IP", "172.22.0.50")
 	servicePort := getenvInt("SERVICE_PORT", 80)
 

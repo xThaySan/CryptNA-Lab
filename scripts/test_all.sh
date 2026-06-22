@@ -9,6 +9,7 @@ echo
 echo "[0] History-bound unit tests"
 ./scripts/test_history_hash_chain_unit.sh
 ./scripts/test_history_negative_unit.sh
+./scripts/test_history_recovery_unit.sh
 
 echo
 echo "[1] SPA nominal"
@@ -33,6 +34,22 @@ echo "[5] Client XFRM cleanup"
 echo
 echo "[6] XFRM multi-session"
 ./scripts/test_xfrm_multi_session.sh 3
+
+echo
+echo "[7] Attested fail-closed end-to-end"
+./scripts/test_attested_v1_end_to_end.sh
+
+echo
+echo "[8] Missing required attestation rejection"
+./scripts/test_attestation_required_missing.sh
+
+echo
+echo "[9] Real two-client XFRM"
+./scripts/test_real_multi_client.sh
+
+echo
+echo "[10] Attested real XFRM end-to-end"
+./scripts/test_attested_xfrm_end_to_end.sh
 
 echo
 echo "=== CRYPTNA full test suite OK ==="

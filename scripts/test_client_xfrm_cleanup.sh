@@ -2,7 +2,9 @@
 set -euo pipefail
 
 echo "[1] start lab with short SA lifetime"
-SA_LIFETIME_SECONDS=10 SESSION_REAPER_INTERVAL_SECONDS=2 XFRM_MODE=apply CRYPTNA_DEBUG=1 docker compose up -d >/dev/null
+docker compose down -v --remove-orphans >/dev/null 2>&1 || true
+SA_LIFETIME_SECONDS=10 SESSION_REAPER_INTERVAL_SECONDS=2 XFRM_MODE=apply CRYPTNA_DEBUG=1 docker compose up -d --build >/dev/null
+./scripts/wait_lab_ready.sh
 
 echo "[2] cleanup existing XFRM state"
 docker exec cryptna-client ip xfrm policy flush || true

@@ -19,18 +19,25 @@ import (
 type verifierConfig struct {
 	VerifierID          string
 	IdentityPath        string
+	EnrollmentPath      string
 	ExpectedMeasurement string
 	ExpectedPolicyHash  string
 	TokenTTLSeconds     int
 	AllowedScope        []string
 	MaxSALifetime       int
+	RequiredObserver    string
 	StatePath           string
+}
+
+type enrolledPEP struct {
+	SigningPublicKey string `json:"signing_public_key"`
 }
 
 type verifierState struct {
 	mu           sync.Mutex
 	checkpoints  map[string]protocol.EnforcementCheckpoint
 	activeStates map[string]map[string]trackedSession
+	lastTokens   map[string]protocol.CapacityToken
 }
 
 type trackedSession struct {
@@ -41,23 +48,28 @@ type trackedSession struct {
 	PEPInSPI      string
 	ReqID         uint32
 	ExpiresAt     string
+	XFRMPlanHash  string
 }
 
 func main() {
 	cfg := verifierConfig{
 		VerifierID:          getenv("VERIFIER_ID", "cryptna-verifier-v1"),
 		IdentityPath:        getenv("VERIFIER_IDENTITY", "/app/identity.json"),
+		EnrollmentPath:      getenv("VERIFIER_ENROLLED_PEPS", "/app/enrolled_peps.json"),
 		ExpectedMeasurement: getenv("VERIFIER_EXPECTED_MEASUREMENT", ""),
 		ExpectedPolicyHash:  getenv("VERIFIER_EXPECTED_POLICY_HASH", ""),
 		TokenTTLSeconds:     getenvInt("VERIFIER_TOKEN_TTL_SECONDS", 120),
 		AllowedScope:        splitCSV(getenv("VERIFIER_ALLOWED_SCOPE", "svc-http")),
 		MaxSALifetime:       getenvInt("VERIFIER_MAX_SA_LIFETIME_SECONDS", 60),
+		RequiredObserver:    strings.ToLower(getenv("VERIFIER_REQUIRED_OBSERVER_PROFILE", "posthoc")),
 		StatePath:           getenv("VERIFIER_STATE_PATH", ""),
 	}
 	id := mustLoadJSON[attest.Ed25519Identity](cfg.IdentityPath)
+	enrolled := mustLoadJSON[map[string]enrolledPEP](cfg.EnrollmentPath)
 	state := &verifierState{
 		checkpoints:  map[string]protocol.EnforcementCheckpoint{},
 		activeStates: map[string]map[string]trackedSession{},
+		lastTokens:   map[string]protocol.CapacityToken{},
 	}
 	if err := loadVerifierState(cfg.StatePath, state); err != nil {
 		log.Fatalf("load verifier state: %v", err)
@@ -68,7 +80,14 @@ func main() {
 		w.Write([]byte("ok\n"))
 	})
 
-	http.HandleFunc("/capacity", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/capacity", capacityHandler(cfg, id, enrolled, state))
+
+	log.Printf("[verifier] listening on :8080 id=%s enrolled_peps=%d expected_measurement=%s expected_policy_hash=%s ttl=%ds allowed_scope=%v max_sa_lifetime=%ds required_observer=%s", cfg.VerifierID, len(enrolled), cfg.ExpectedMeasurement, cfg.ExpectedPolicyHash, cfg.TokenTTLSeconds, cfg.AllowedScope, cfg.MaxSALifetime, cfg.RequiredObserver)
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func capacityHandler(cfg verifierConfig, id attest.Ed25519Identity, enrolled map[string]enrolledPEP, state *verifierState) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -80,6 +99,15 @@ func main() {
 		}
 		if req.PEPID == "" || req.PEPSigningPubKey == "" || req.Measurement == "" || req.PolicyHash == "" || req.MaxSALifetime <= 0 {
 			http.Error(w, "invalid capacity request", http.StatusBadRequest)
+			return
+		}
+		pepEnrollment, ok := enrolled[req.PEPID]
+		if !ok || pepEnrollment.SigningPublicKey == "" {
+			http.Error(w, "PEP is not enrolled", http.StatusForbidden)
+			return
+		}
+		if req.PEPSigningPubKey != pepEnrollment.SigningPublicKey {
+			http.Error(w, "PEP signing key does not match enrollment", http.StatusForbidden)
 			return
 		}
 		if cfg.ExpectedMeasurement != "" && req.Measurement != cfg.ExpectedMeasurement {
@@ -108,38 +136,30 @@ func main() {
 
 		state.mu.Lock()
 		previous, ok := state.checkpoints[req.PEPID]
+		if ok {
+			if tok, retryOK := acceptedCheckpointRetry(*req.History, req, cfg, previous, state.lastTokens[req.PEPID], pepEnrollment.SigningPublicKey, id.PublicKey); retryOK {
+				state.mu.Unlock()
+				log.Printf("[verifier] replayed accepted response pep_id=%s epoch=%d checkpoint_hash=%s", req.PEPID, previous.Epoch, shortHash(tok.CheckpointHash))
+				writeJSON(w, tok)
+				return
+			}
+		}
+		activeCopy := copyTrackedSessions(state.activeStates[req.PEPID])
+		state.mu.Unlock()
+
 		var previousPtr *protocol.EnforcementCheckpoint
 		if ok {
 			previousPtr = &previous
 		}
 		checkpointHash, err := attest.VerifyHistoryEvidence(*req.History, req.PEPID, req.PEPSigningPubKey, previousPtr)
-		activeCopy := copyTrackedSessions(state.activeStates[req.PEPID])
 		if err == nil {
-			err = verifyEnforcementPolicy(*req.History, req, activeCopy)
+			err = verifyEnforcementPolicy(*req.History, req, activeCopy, cfg.RequiredObserver)
 		}
 		if err != nil {
-			state.mu.Unlock()
 			log.Printf("[verifier] rejected history pep_id=%s err=%v", req.PEPID, err)
 			http.Error(w, "invalid enforcement history: "+err.Error(), http.StatusForbidden)
 			return
 		}
-		state.checkpoints[req.PEPID] = req.History.Checkpoint
-		state.activeStates[req.PEPID] = activeCopy
-		if err := saveVerifierState(cfg.StatePath, state); err != nil {
-			state.mu.Unlock()
-			log.Printf("[verifier] persist state failed pep_id=%s err=%v", req.PEPID, err)
-			http.Error(w, "persist verifier state failed", http.StatusInternalServerError)
-			return
-		}
-		log.Printf("[verifier] accepted history pep_id=%s epoch=%d checkpoint_hash=%s events=%d last_event_index=%d",
-			req.PEPID,
-			req.History.Checkpoint.Epoch,
-			shortHash(checkpointHash),
-			len(req.History.Events),
-			req.History.Checkpoint.LastEventIndex,
-		)
-		state.mu.Unlock()
-
 		now := time.Now().UTC()
 		tok := protocol.CapacityToken{
 			Version:          1,
@@ -153,6 +173,7 @@ func main() {
 			IssuedAt:         now.Format(time.RFC3339),
 			ExpiresAt:        now.Add(time.Duration(cfg.TokenTTLSeconds) * time.Second).Format(time.RFC3339),
 			MaxSALifetime:    req.MaxSALifetime,
+			ObserverProfile:  cfg.RequiredObserver,
 			CheckpointHash:   checkpointHash,
 			HistoryEpoch:     req.History.Checkpoint.Epoch,
 		}
@@ -162,15 +183,91 @@ func main() {
 			log.Println("sign capacity token:", err)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(signed)
-	})
 
-	log.Printf("[verifier] listening on :8080 id=%s expected_measurement=%s expected_policy_hash=%s ttl=%ds allowed_scope=%v max_sa_lifetime=%ds", cfg.VerifierID, cfg.ExpectedMeasurement, cfg.ExpectedPolicyHash, cfg.TokenTTLSeconds, cfg.AllowedScope, cfg.MaxSALifetime)
-	log.Fatal(http.ListenAndServe(":8080", nil))
+		state.mu.Lock()
+		current, currentOK := state.checkpoints[req.PEPID]
+		stateChanged := currentOK != ok || (ok && current != previous)
+		if stateChanged {
+			if currentOK {
+				if replay, retryOK := acceptedCheckpointRetry(*req.History, req, cfg, current, state.lastTokens[req.PEPID], pepEnrollment.SigningPublicKey, id.PublicKey); retryOK {
+					state.mu.Unlock()
+					writeJSON(w, replay)
+					return
+				}
+			}
+			state.mu.Unlock()
+			http.Error(w, "concurrent checkpoint update; retry with current state", http.StatusConflict)
+			return
+		}
+
+		next := persistentVerifierState{
+			Checkpoints:  copyCheckpoints(state.checkpoints),
+			ActiveStates: copyAllActiveStates(state.activeStates),
+			LastTokens:   copyCapacityTokens(state.lastTokens),
+		}
+		next.Checkpoints[req.PEPID] = req.History.Checkpoint
+		next.ActiveStates[req.PEPID] = activeCopy
+		next.LastTokens[req.PEPID] = signed
+		if err := savePersistentVerifierState(cfg.StatePath, next); err != nil {
+			state.mu.Unlock()
+			log.Printf("[verifier] persist state failed pep_id=%s err=%v", req.PEPID, err)
+			http.Error(w, "persist verifier state failed", http.StatusInternalServerError)
+			return
+		}
+		state.checkpoints = next.Checkpoints
+		state.activeStates = next.ActiveStates
+		state.lastTokens = next.LastTokens
+		log.Printf("[verifier] accepted history pep_id=%s epoch=%d checkpoint_hash=%s events=%d last_event_index=%d",
+			req.PEPID,
+			req.History.Checkpoint.Epoch,
+			shortHash(checkpointHash),
+			len(req.History.Events),
+			req.History.Checkpoint.LastEventIndex,
+		)
+		state.mu.Unlock()
+		writeJSON(w, signed)
+	}
 }
 
-func verifyEnforcementPolicy(history protocol.HistoryEvidence, req protocol.CapacityRequest, active map[string]trackedSession) error {
+func acceptedCheckpointRetry(history protocol.HistoryEvidence, req protocol.CapacityRequest, cfg verifierConfig, current protocol.EnforcementCheckpoint, tok protocol.CapacityToken, pepPubKey, verifierPubKey string) (protocol.CapacityToken, bool) {
+	if history.Checkpoint != current || tok.Signature == "" {
+		return protocol.CapacityToken{}, false
+	}
+	if err := attest.VerifyEnforcementCheckpoint(history.Checkpoint, pepPubKey); err != nil {
+		return protocol.CapacityToken{}, false
+	}
+	h, err := attest.HashEnforcementCheckpoint(history.Checkpoint)
+	if err != nil || tok.CheckpointHash != h || tok.PEPID != history.Checkpoint.PEPID || tok.PEPSigningPubKey != pepPubKey {
+		return protocol.CapacityToken{}, false
+	}
+	issuedAt, err := time.Parse(time.RFC3339, tok.IssuedAt)
+	if err != nil || attest.VerifyCapacityToken(tok, verifierPubKey, issuedAt) != nil {
+		return protocol.CapacityToken{}, false
+	}
+	if tok.VerifierID != cfg.VerifierID || tok.Measurement != req.Measurement || tok.PolicyHash != req.PolicyHash ||
+		tok.MaxSALifetime != req.MaxSALifetime || tok.ObserverProfile != cfg.RequiredObserver || !sameStringsUnordered(tok.Scope, req.Scope) {
+		return protocol.CapacityToken{}, false
+	}
+	return tok, true
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("encode response: %v", err)
+	}
+}
+
+type lifecycleStage struct {
+	phase        string
+	xfrmPlanHash string
+}
+
+func verifyEnforcementPolicy(history protocol.HistoryEvidence, req protocol.CapacityRequest, active map[string]trackedSession, requiredProfiles ...string) error {
+	requiredProfile := "posthoc"
+	if len(requiredProfiles) > 0 && strings.TrimSpace(requiredProfiles[0]) != "" {
+		requiredProfile = strings.ToLower(strings.TrimSpace(requiredProfiles[0]))
+	}
 	allowedTypes := map[string]bool{
 		"pep_start":            true,
 		"capacity_requested":   true,
@@ -182,7 +279,7 @@ func verifyEnforcementPolicy(history protocol.HistoryEvidence, req protocol.Capa
 		"xfrm_delete_intent":   true,
 		"xfrm_delete_observed": true,
 	}
-	stages := map[string]string{}
+	stages := map[string]lifecycleStage{}
 
 	for _, e := range history.Events {
 		if !allowedTypes[e.EventType] {
@@ -201,23 +298,35 @@ func verifyEnforcementPolicy(history protocol.HistoryEvidence, req protocol.Capa
 			if _, exists := active[key]; exists {
 				return fmt.Errorf("session already active at index %d", e.Index)
 			}
-			stages[key] = "apply_intent"
+			if _, exists := stages[key]; exists {
+				return fmt.Errorf("duplicate or overlapping apply intent at index %d", e.Index)
+			}
+			planHash, err := requireXFRMPlanHash(e)
+			if err != nil {
+				return err
+			}
+			if err := validateSessionLifetime(e, req.MaxSALifetime); err != nil {
+				return err
+			}
+			stages[key] = lifecycleStage{phase: "apply_intent", xfrmPlanHash: planHash}
 		case "xfrm_apply_observed":
 			if err := requireCompleteSessionEvent(e); err != nil {
 				return err
 			}
-			if stages[key] != "apply_intent" {
+			stage := stages[key]
+			if stage.phase != "apply_intent" {
 				return fmt.Errorf("xfrm apply observed without matching intent at index %d", e.Index)
 			}
-			if e.Metadata != nil && e.Metadata["applied"] == "false" {
-				return fmt.Errorf("xfrm apply not observed at index %d", e.Index)
+			if err := verifyObservedEvent(e, "applied", requiredProfile, stage.xfrmPlanHash); err != nil {
+				return err
 			}
-			stages[key] = "apply_observed"
+			stages[key] = lifecycleStage{phase: "apply_observed", xfrmPlanHash: stage.xfrmPlanHash}
 		case "session_activated":
 			if err := requireCompleteSessionEvent(e); err != nil {
 				return err
 			}
-			if stages[key] != "apply_observed" {
+			stage := stages[key]
+			if stage.phase != "apply_observed" {
 				return fmt.Errorf("session activated without observed XFRM apply at index %d", e.Index)
 			}
 			exp := eventExpiry(e)
@@ -232,39 +341,60 @@ func verifyEnforcementPolicy(history protocol.HistoryEvidence, req protocol.Capa
 				PEPInSPI:      e.PEPInSPI,
 				ReqID:         e.ReqID,
 				ExpiresAt:     exp,
+				XFRMPlanHash:  stage.xfrmPlanHash,
 			}
-			stages[key] = "active"
+			stages[key] = lifecycleStage{phase: "active", xfrmPlanHash: stage.xfrmPlanHash}
 		case "session_expired":
 			if err := requireCompleteSessionEvent(e); err != nil {
 				return err
 			}
-			if _, exists := active[key]; !exists {
+			tracked, exists := active[key]
+			if !exists {
 				return fmt.Errorf("expiration for unknown session at index %d", e.Index)
 			}
-			stages[key] = "expired"
+			if err := validateExpirationEvent(e, tracked); err != nil {
+				return err
+			}
+			stages[key] = lifecycleStage{phase: "expired", xfrmPlanHash: tracked.XFRMPlanHash}
 		case "xfrm_delete_intent":
 			if err := requireCompleteSessionEvent(e); err != nil {
 				return err
 			}
-			if _, exists := active[key]; !exists {
+			tracked, exists := active[key]
+			if !exists {
 				return fmt.Errorf("delete intent for unknown session at index %d", e.Index)
 			}
-			if stages[key] != "expired" {
+			if stages[key].phase != "expired" {
 				return fmt.Errorf("delete intent without session_expired at index %d", e.Index)
 			}
-			stages[key] = "delete_intent"
+			planHash, err := requireXFRMPlanHash(e)
+			if err != nil {
+				return err
+			}
+			if planHash != tracked.XFRMPlanHash {
+				return fmt.Errorf("delete intent XFRM plan mismatch at index %d", e.Index)
+			}
+			stages[key] = lifecycleStage{phase: "delete_intent", xfrmPlanHash: planHash}
 		case "xfrm_delete_observed":
 			if err := requireCompleteSessionEvent(e); err != nil {
 				return err
 			}
-			if stages[key] != "delete_intent" {
+			stage := stages[key]
+			if stage.phase != "delete_intent" {
 				return fmt.Errorf("xfrm delete observed without matching intent at index %d", e.Index)
 			}
-			if e.Metadata != nil && e.Metadata["deleted"] == "false" {
-				return fmt.Errorf("xfrm delete not observed at index %d", e.Index)
+			if err := verifyObservedEvent(e, "deleted", requiredProfile, stage.xfrmPlanHash); err != nil {
+				return err
 			}
 			delete(active, key)
-			stages[key] = "deleted"
+			stages[key] = lifecycleStage{phase: "deleted", xfrmPlanHash: stage.xfrmPlanHash}
+		}
+	}
+
+	for key, stage := range stages {
+		switch stage.phase {
+		case "apply_intent", "apply_observed", "expired", "delete_intent":
+			return fmt.Errorf("incomplete enforcement transaction for %s at checkpoint: %s", key, stage.phase)
 		}
 	}
 
@@ -285,14 +415,104 @@ func verifyEnforcementPolicy(history protocol.HistoryEvidence, req protocol.Capa
 }
 
 func requireCompleteSessionEvent(e protocol.EnforcementEvent) error {
-	if e.ServiceID == "" || e.ClientPubKey == "" || e.ClientInSPI == "" || e.PEPInSPI == "" || e.ClientInnerIP == "" {
+	if e.ServiceID == "" || e.ClientPubKey == "" || e.ClientInSPI == "" || e.PEPInSPI == "" || e.ClientInnerIP == "" || e.ClientOuterIP == "" || e.ReqID == 0 {
 		return fmt.Errorf("incomplete session event at index %d", e.Index)
 	}
 	return nil
 }
 
 func sessionKey(e protocol.EnforcementEvent) string {
-	return e.ClientPubKey + "|" + e.ServiceID + "|" + e.ClientInnerIP + "|" + e.ClientInSPI + "|" + e.PEPInSPI
+	return fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d", e.ClientPubKey, e.ServiceID, e.ClientOuterIP, e.ClientInnerIP, e.ClientInSPI, e.PEPInSPI, e.ReqID)
+}
+
+func requireXFRMPlanHash(e protocol.EnforcementEvent) (string, error) {
+	if e.Metadata == nil || strings.TrimSpace(e.Metadata["xfrm_plan_hash"]) == "" || e.Metadata["xfrm_plan_hash"] == "hash_error" {
+		return "", fmt.Errorf("event missing valid XFRM plan hash at index %d", e.Index)
+	}
+	return e.Metadata["xfrm_plan_hash"], nil
+}
+
+func verifyObservedEvent(e protocol.EnforcementEvent, outcome, requiredProfile, expectedPlanHash string) error {
+	planHash, err := requireXFRMPlanHash(e)
+	if err != nil {
+		return err
+	}
+	if planHash != expectedPlanHash {
+		return fmt.Errorf("observed XFRM plan mismatch at index %d", e.Index)
+	}
+	if e.Metadata == nil {
+		return fmt.Errorf("missing observer metadata at index %d", e.Index)
+	}
+	mode := strings.ToLower(strings.TrimSpace(e.Metadata["xfrm_mode"]))
+	actualProfile := strings.ToLower(strings.TrimSpace(e.Metadata["observer_source"]))
+	value := strings.ToLower(strings.TrimSpace(e.Metadata[outcome]))
+	if requiredProfile == "dry-run" {
+		if mode == "apply" || value != "assumed" {
+			return fmt.Errorf("dry-run observer profile not satisfied at index %d", e.Index)
+		}
+		return nil
+	}
+	if mode != "apply" || value != "true" {
+		action := "apply"
+		if outcome == "deleted" {
+			action = "delete"
+		}
+		return fmt.Errorf("xfrm %s not observed at index %d", action, e.Index)
+	}
+	switch requiredProfile {
+	case "posthoc":
+		if actualProfile != "posthoc" && actualProfile != "posthoc+ebpf" {
+			return fmt.Errorf("required posthoc observer profile missing at index %d", e.Index)
+		}
+	case "hybrid":
+		if actualProfile != "posthoc+ebpf" || e.Metadata["ebpf_matched"] != "true" {
+			return fmt.Errorf("required hybrid observer profile missing at index %d", e.Index)
+		}
+	case "ebpf":
+		if actualProfile != "ebpf" || e.Metadata["ebpf_matched"] != "true" {
+			return fmt.Errorf("required eBPF observer profile missing at index %d", e.Index)
+		}
+	default:
+		return fmt.Errorf("unsupported required observer profile %q", requiredProfile)
+	}
+	return nil
+}
+
+func validateSessionLifetime(e protocol.EnforcementEvent, maxLifetime int) error {
+	expRaw := eventExpiry(e)
+	if expRaw == "" {
+		return fmt.Errorf("session event missing expiry at index %d", e.Index)
+	}
+	exp, err := time.Parse(time.RFC3339, expRaw)
+	if err != nil {
+		return fmt.Errorf("invalid session expiry at index %d: %w", e.Index, err)
+	}
+	ts, err := time.Parse(time.RFC3339, e.Timestamp)
+	if err != nil {
+		return fmt.Errorf("invalid session timestamp at index %d: %w", e.Index, err)
+	}
+	if maxLifetime > 0 && exp.Sub(ts) > time.Duration(maxLifetime+1)*time.Second {
+		return fmt.Errorf("session lifetime exceeds requested maximum at index %d", e.Index)
+	}
+	return nil
+}
+
+func validateExpirationEvent(e protocol.EnforcementEvent, tracked trackedSession) error {
+	if eventExpiry(e) != tracked.ExpiresAt {
+		return fmt.Errorf("expiration metadata mismatch at index %d", e.Index)
+	}
+	exp, err := time.Parse(time.RFC3339, tracked.ExpiresAt)
+	if err != nil {
+		return fmt.Errorf("invalid tracked expiry at index %d: %w", e.Index, err)
+	}
+	ts, err := time.Parse(time.RFC3339, e.Timestamp)
+	if err != nil {
+		return fmt.Errorf("invalid expiration timestamp at index %d: %w", e.Index, err)
+	}
+	if ts.Before(exp) {
+		return fmt.Errorf("session expired event precedes expiry at index %d", e.Index)
+	}
+	return nil
 }
 
 func eventExpiry(e protocol.EnforcementEvent) string {
@@ -313,6 +533,7 @@ func copyTrackedSessions(in map[string]trackedSession) map[string]trackedSession
 type persistentVerifierState struct {
 	Checkpoints  map[string]protocol.EnforcementCheckpoint `json:"checkpoints"`
 	ActiveStates map[string]map[string]trackedSession      `json:"active_states"`
+	LastTokens   map[string]protocol.CapacityToken         `json:"last_tokens"`
 }
 
 func loadVerifierState(path string, state *verifierState) error {
@@ -337,20 +558,27 @@ func loadVerifierState(path string, state *verifierState) error {
 	if persisted.ActiveStates != nil {
 		state.activeStates = persisted.ActiveStates
 	}
+	if persisted.LastTokens != nil {
+		state.lastTokens = persisted.LastTokens
+	}
 	log.Printf("[verifier] loaded persisted state path=%s peps=%d", path, len(state.checkpoints))
 	return nil
 }
 
 func saveVerifierState(path string, state *verifierState) error {
+	return savePersistentVerifierState(path, persistentVerifierState{
+		Checkpoints:  state.checkpoints,
+		ActiveStates: state.activeStates,
+		LastTokens:   state.lastTokens,
+	})
+}
+
+func savePersistentVerifierState(path string, persisted persistentVerifierState) error {
 	if path == "" {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
-	}
-	persisted := persistentVerifierState{
-		Checkpoints:  state.checkpoints,
-		ActiveStates: state.activeStates,
 	}
 	tmp := path + ".tmp"
 	b, err := json.MarshalIndent(persisted, "", "  ")
@@ -361,6 +589,31 @@ func saveVerifierState(path string, state *verifierState) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+func copyCheckpoints(in map[string]protocol.EnforcementCheckpoint) map[string]protocol.EnforcementCheckpoint {
+	out := make(map[string]protocol.EnforcementCheckpoint, len(in)+1)
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func copyAllActiveStates(in map[string]map[string]trackedSession) map[string]map[string]trackedSession {
+	out := make(map[string]map[string]trackedSession, len(in)+1)
+	for pepID, sessions := range in {
+		out[pepID] = copyTrackedSessions(sessions)
+	}
+	return out
+}
+
+func copyCapacityTokens(in map[string]protocol.CapacityToken) map[string]protocol.CapacityToken {
+	out := make(map[string]protocol.CapacityToken, len(in)+1)
+	for k, v := range in {
+		v.Scope = append([]string{}, v.Scope...)
+		out[k] = v
+	}
+	return out
 }
 
 func scopeSubset(requested, allowed []string) bool {
@@ -385,6 +638,29 @@ func contains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func sameStringsUnordered(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	counts := make(map[string]int, len(left))
+	for _, value := range left {
+		counts[strings.TrimSpace(value)]++
+	}
+	for _, value := range right {
+		key := strings.TrimSpace(value)
+		counts[key]--
+		if counts[key] < 0 {
+			return false
+		}
+	}
+	for _, count := range counts {
+		if count != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func splitCSV(s string) []string {

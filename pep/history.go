@@ -37,6 +37,16 @@ type EnforcementHistory struct {
 	lastAcceptedEpoch           uint64
 }
 
+type enforcementHistorySnapshot struct {
+	PEPID                       string                      `json:"pep_id"`
+	Events                      []protocol.EnforcementEvent `json:"events"`
+	LastEventHash               string                      `json:"last_event_hash"`
+	LastIndex                   uint64                      `json:"last_index"`
+	LastAcceptedCheckpointHash  string                      `json:"last_accepted_checkpoint_hash"`
+	LastAcceptedCheckpointIndex uint64                      `json:"last_accepted_checkpoint_index"`
+	LastAcceptedEpoch           uint64                      `json:"last_accepted_epoch"`
+}
+
 var enforcementHistory *EnforcementHistory
 
 // historyTransactionMu serializes checkpoint construction with multi-event
@@ -47,6 +57,54 @@ var historyTransactionMu sync.Mutex
 
 func NewEnforcementHistory(pepID string) *EnforcementHistory {
 	return &EnforcementHistory{pepID: pepID}
+}
+
+func (h *EnforcementHistory) Snapshot() enforcementHistorySnapshot {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return enforcementHistorySnapshot{
+		PEPID:                       h.pepID,
+		Events:                      append([]protocol.EnforcementEvent{}, h.events...),
+		LastEventHash:               h.lastEventHash,
+		LastIndex:                   h.lastIndex,
+		LastAcceptedCheckpointHash:  h.lastAcceptedCheckpointHash,
+		LastAcceptedCheckpointIndex: h.lastAcceptedCheckpointIndex,
+		LastAcceptedEpoch:           h.lastAcceptedEpoch,
+	}
+}
+
+func (h *EnforcementHistory) Restore(snapshot enforcementHistorySnapshot) error {
+	if snapshot.PEPID != h.pepID {
+		return fmt.Errorf("persisted history PEP identity mismatch")
+	}
+	lastHash := ""
+	lastIndex := uint64(0)
+	for i, event := range snapshot.Events {
+		if event.PEPID != h.pepID || event.Index != lastIndex+1 || event.PrevHash != lastHash {
+			return fmt.Errorf("invalid persisted event chain at offset %d", i)
+		}
+		hash, err := attest.HashEnforcementEvent(event)
+		if err != nil || hash != event.EventHash {
+			return fmt.Errorf("invalid persisted event hash at offset %d", i)
+		}
+		lastHash = hash
+		lastIndex = event.Index
+	}
+	if snapshot.LastEventHash != lastHash || snapshot.LastIndex != lastIndex {
+		return fmt.Errorf("persisted history summary mismatch")
+	}
+	if snapshot.LastAcceptedCheckpointIndex > snapshot.LastIndex {
+		return fmt.Errorf("persisted accepted checkpoint is ahead of history")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.events = append([]protocol.EnforcementEvent{}, snapshot.Events...)
+	h.lastEventHash = snapshot.LastEventHash
+	h.lastIndex = snapshot.LastIndex
+	h.lastAcceptedCheckpointHash = snapshot.LastAcceptedCheckpointHash
+	h.lastAcceptedCheckpointIndex = snapshot.LastAcceptedCheckpointIndex
+	h.lastAcceptedEpoch = snapshot.LastAcceptedEpoch
+	return nil
 }
 
 func (h *EnforcementHistory) AppendEvent(eventType string, session *protocol.Session, meta map[string]string) (protocol.EnforcementEvent, error) {

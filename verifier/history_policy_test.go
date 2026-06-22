@@ -64,7 +64,7 @@ func TestVerifyEnforcementPolicyRejectsDeleteWithoutExpiration(t *testing.T) {
 }
 
 func testCapacityRequest() protocol.CapacityRequest {
-	return protocol.CapacityRequest{PEPID: "cryptna-pep-1", Scope: []string{"svc-http"}}
+	return protocol.CapacityRequest{PEPID: "cryptna-pep-1", Scope: []string{"svc-http"}, MaxSALifetime: 60}
 }
 
 func testEvent(index uint64, typ string, exp time.Time) protocol.EnforcementEvent {
@@ -76,12 +76,18 @@ func testEvent(index uint64, typ string, exp time.Time) protocol.EnforcementEven
 		Timestamp:     time.Now().UTC().Format(time.RFC3339),
 		ServiceID:     "svc-http",
 		ClientPubKey:  "client-key",
+		ClientOuterIP: "172.20.0.10",
 		ClientInnerIP: "10.200.0.10",
 		ClientInSPI:   "0x11111111",
 		PEPInSPI:      "0x22222222",
 		ReqID:         1000,
 		Metadata: map[string]string{
-			"expires_at": exp.UTC().Format(time.RFC3339),
+			"expires_at":      exp.UTC().Format(time.RFC3339),
+			"xfrm_plan_hash":  "test-plan-hash",
+			"xfrm_mode":       "apply",
+			"observer_source": "posthoc",
+			"applied":         "true",
+			"deleted":         "true",
 		},
 	}
 }

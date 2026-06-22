@@ -14,18 +14,26 @@ RAW_DIR="$RESULT_DIR/11_trials_raw"
 mkdir -p "$RAW_DIR"
 
 rm -f "$PER_TRIAL" "$OVERHEAD" "$AGG" "$STATUS"
+rm -f "$RAW_DIR"/*.csv
 echo "trial,status" > "$STATUS"
 
 for t in $(seq 1 "$TRIALS"); do
-  echo "[trial=$t/$TRIALS] run XFRM apply comparison with N=$N"
+  if [ $((t % 2)) -eq 1 ]; then
+    order="baseline-first"
+  else
+    order="history-first"
+  fi
+  echo "[trial=$t/$TRIALS] run XFRM apply comparison with N=$N order=$order"
+  rm -f "$RESULT_DIR/10_xfrm_apply_latency_compare_summary.csv"
   set +e
-  N="$N" ./experiments/10_xfrm_apply_latency_compare.sh
+  N="$N" CASE_ORDER="$order" ./experiments/10_xfrm_apply_latency_compare.sh
   status=$?
   set -e
   echo "$t,$status" >> "$STATUS"
 
   if [ "$status" -ne 0 ]; then
-    echo "[trial=$t/$TRIALS] comparison script returned status $status; keeping any generated summaries" >&2
+    echo "[trial=$t/$TRIALS] comparison script returned status $status; excluding the trial" >&2
+    continue
   fi
 
   if [ ! -f "$RESULT_DIR/10_xfrm_apply_latency_compare_summary.csv" ]; then
@@ -197,4 +205,9 @@ print(f'per_trial={per_trial}')
 print(f'overhead={overhead_out}')
 print(f'aggregate={agg_out}')
 print(f'status={status_path}')
+if failed_scripts or len(by_trial) != trials_requested:
+    raise SystemExit(
+        f'incomplete XFRM campaign: completed={len(by_trial)}/{trials_requested}, '
+        f'failed_script_invocations={failed_scripts}'
+    )
 PY

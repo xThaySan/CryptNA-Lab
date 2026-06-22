@@ -34,4 +34,5 @@ RUN apk add --no-cache curl iproute2 tcpdump iptables \
 WORKDIR /app
 COPY --from=build /src/pep/pep /app/pep
 COPY pep/ebpf /app/ebpf
+COPY pep/identity.json /app/pep_attestation_key.json
 CMD ["/app/pep"]

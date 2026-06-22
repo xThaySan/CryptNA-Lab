@@ -3,12 +3,23 @@ package main
 import (
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"cryptna-lab/common/ipsecutil"
 	"cryptna-lab/common/logutil"
 	"cryptna-lab/common/protocol"
 )
+
+var runIPXFRM = func(args ...string) ([]byte, error) {
+	return exec.Command("ip", args...).CombinedOutput()
+}
+
+type xfrmLookupResult struct {
+	present bool
+	exact   bool
+	detail  string
+}
 
 func buildXFRMPlan(s protocol.Session) (protocol.XFRMPlan, error) {
 	return ipsecutil.BuildXFRMTunnelPlan(ipsecutil.TunnelPlanInput{
@@ -76,20 +87,19 @@ func observeXFRMAppliedPosthoc(s protocol.Session) map[string]string {
 		out["applied"] = "assumed"
 		return out
 	}
-	state, stateErr := exec.Command("sh", "-c", "ip xfrm state").CombinedOutput()
-	policy, policyErr := exec.Command("sh", "-c", "ip xfrm policy").CombinedOutput()
-	stateText := string(state)
-	policyText := string(policy)
-	if stateErr != nil {
-		out["state_error"] = stateErr.Error()
+	checks := exactSessionXFRMLookups(s)
+	applied := true
+	for name, check := range checks {
+		out[name+"_present"] = strconv.FormatBool(check.present)
+		out[name+"_exact"] = strconv.FormatBool(check.exact)
+		if check.detail != "" {
+			out[name+"_error"] = check.detail
+		}
+		if !check.present || !check.exact {
+			applied = false
+		}
 	}
-	if policyErr != nil {
-		out["policy_error"] = policyErr.Error()
-	}
-	out["pep_in_spi_present"] = fmt.Sprintf("%t", strings.Contains(stateText, s.PEPInSPI))
-	out["client_in_spi_present"] = fmt.Sprintf("%t", strings.Contains(stateText, s.ClientInSPI))
-	out["fwd_policy_present"] = fmt.Sprintf("%t", strings.Contains(policyText, s.ClientInnerIP) && strings.Contains(policyText, s.ServiceIP))
-	out["applied"] = fmt.Sprintf("%t", stateErr == nil && policyErr == nil && strings.Contains(stateText, s.PEPInSPI) && strings.Contains(stateText, s.ClientInSPI) && strings.Contains(policyText, s.ClientInnerIP) && strings.Contains(policyText, s.ServiceIP))
+	out["applied"] = strconv.FormatBool(applied)
 	return out
 }
 
@@ -104,22 +114,105 @@ func observeXFRMDeletedPosthoc(s protocol.Session) map[string]string {
 		out["deleted"] = "assumed"
 		return out
 	}
-	state, stateErr := exec.Command("sh", "-c", "ip xfrm state").CombinedOutput()
-	policy, policyErr := exec.Command("sh", "-c", "ip xfrm policy").CombinedOutput()
-	stateText := string(state)
-	policyText := string(policy)
-	if stateErr != nil {
-		out["state_error"] = stateErr.Error()
+	checks := exactSessionXFRMLookups(s)
+	deleted := true
+	for name, check := range checks {
+		out[name+"_present"] = strconv.FormatBool(check.present)
+		out[name+"_absence_confirmed"] = strconv.FormatBool(check.exact && !check.present)
+		if check.detail != "" {
+			out[name+"_error"] = check.detail
+		}
+		if check.present || !check.exact {
+			deleted = false
+		}
 	}
-	if policyErr != nil {
-		out["policy_error"] = policyErr.Error()
-	}
-	pepPresent := strings.Contains(stateText, s.PEPInSPI)
-	clientPresent := strings.Contains(stateText, s.ClientInSPI)
-	policyPresent := strings.Contains(policyText, s.ClientInnerIP) && strings.Contains(policyText, s.ServiceIP)
-	out["pep_in_spi_present"] = fmt.Sprintf("%t", pepPresent)
-	out["client_in_spi_present"] = fmt.Sprintf("%t", clientPresent)
-	out["policy_present"] = fmt.Sprintf("%t", policyPresent)
-	out["deleted"] = fmt.Sprintf("%t", stateErr == nil && policyErr == nil && !pepPresent && !clientPresent && !policyPresent)
+	out["deleted"] = strconv.FormatBool(deleted)
 	return out
+}
+
+func exactSessionXFRMLookups(s protocol.Session) map[string]xfrmLookupResult {
+	reqid := strconv.FormatUint(uint64(s.ReqID), 10)
+	return map[string]xfrmLookupResult{
+		"c2p_state":  lookupXFRMState(s.ClientOuterIP, s.PEPOuterIP, s.PEPInSPI, reqid),
+		"p2c_state":  lookupXFRMState(s.PEPOuterIP, s.ClientOuterIP, s.ClientInSPI, reqid),
+		"c2p_policy": lookupXFRMPolicy("fwd", s.ClientInnerIP, s.ServiceIP, s.ClientOuterIP, s.PEPOuterIP, reqid),
+		"p2c_policy": lookupXFRMPolicy("out", s.ServiceIP, s.ClientInnerIP, s.PEPOuterIP, s.ClientOuterIP, reqid),
+	}
+}
+
+func lookupXFRMState(src, dst, spi, reqid string) xfrmLookupResult {
+	out, err := runIPXFRM("xfrm", "state", "get", "src", src, "dst", dst, "proto", "esp", "spi", spi)
+	if err != nil {
+		if isXFRMNotFound(out) {
+			return xfrmLookupResult{present: false, exact: true}
+		}
+		return xfrmLookupResult{detail: strings.TrimSpace(string(out)) + ": " + err.Error()}
+	}
+	fields := strings.Fields(strings.ToLower(string(out)))
+	exact := containsFieldPair(fields, "src", src) &&
+		containsFieldPair(fields, "dst", dst) &&
+		containsFieldPair(fields, "proto", "esp") &&
+		containsFieldPair(fields, "spi", strings.ToLower(spi)) &&
+		containsFieldPair(fields, "reqid", reqid) &&
+		containsFieldPair(fields, "mode", "tunnel")
+	return xfrmLookupResult{present: true, exact: exact, detail: mismatchDetail(exact, out)}
+}
+
+func lookupXFRMPolicy(direction, selectorSrc, selectorDst, tunnelSrc, tunnelDst, reqid string) xfrmLookupResult {
+	out, err := runIPXFRM("xfrm", "policy", "get", "src", selectorSrc, "dst", selectorDst, "dir", direction)
+	if err != nil {
+		if isXFRMNotFound(out) {
+			return xfrmLookupResult{present: false, exact: true}
+		}
+		return xfrmLookupResult{detail: strings.TrimSpace(string(out)) + ": " + err.Error()}
+	}
+	fields := strings.Fields(strings.ToLower(string(out)))
+	exact := containsAddressPair(fields, "src", selectorSrc) &&
+		containsAddressPair(fields, "dst", selectorDst) &&
+		containsFieldPair(fields, "dir", direction) &&
+		containsSequence(fields, "tmpl", "src", strings.ToLower(tunnelSrc), "dst", strings.ToLower(tunnelDst)) &&
+		containsFieldPair(fields, "proto", "esp") &&
+		containsFieldPair(fields, "reqid", reqid) &&
+		containsFieldPair(fields, "mode", "tunnel")
+	return xfrmLookupResult{present: true, exact: exact, detail: mismatchDetail(exact, out)}
+}
+
+func containsFieldPair(fields []string, key, value string) bool {
+	return containsSequence(fields, strings.ToLower(key), strings.ToLower(value))
+}
+
+func containsAddressPair(fields []string, key, address string) bool {
+	return containsSequence(fields, strings.ToLower(key), strings.ToLower(address)) ||
+		containsSequence(fields, strings.ToLower(key), strings.ToLower(address)+"/32")
+}
+
+func containsSequence(fields []string, sequence ...string) bool {
+	if len(sequence) == 0 || len(sequence) > len(fields) {
+		return false
+	}
+	for i := 0; i <= len(fields)-len(sequence); i++ {
+		matched := true
+		for j := range sequence {
+			if fields[i+j] != strings.ToLower(sequence[j]) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+func isXFRMNotFound(out []byte) bool {
+	text := strings.ToLower(string(out))
+	return strings.Contains(text, "no such file") || strings.Contains(text, "no such process") || strings.Contains(text, "not found")
+}
+
+func mismatchDetail(exact bool, out []byte) string {
+	if exact {
+		return ""
+	}
+	return "XFRM object exists but does not match all expected fields: " + strings.TrimSpace(string(out))
 }

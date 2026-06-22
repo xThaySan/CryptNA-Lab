@@ -101,6 +101,43 @@ func shutdownXFRMObserver() {
 	globalXFRMObserver.stop()
 }
 
+func validateXFRMObserverConfiguration() error {
+	if pepAttestation == nil || !pepAttestation.enabled {
+		return nil
+	}
+	required := strings.ToLower(strings.TrimSpace(getenv("PEP_REQUIRED_OBSERVER_PROFILE", "posthoc")))
+	applyMode := getenv("XFRM_MODE", "dry-run") == "apply"
+	if required == "dry-run" {
+		if applyMode {
+			return fmt.Errorf("dry-run observer profile cannot authorize XFRM apply mode")
+		}
+		return nil
+	}
+	if !applyMode {
+		return fmt.Errorf("observer profile %q requires XFRM apply mode", required)
+	}
+	if globalXFRMObserver == nil {
+		return fmt.Errorf("XFRM observer is not initialized")
+	}
+	switch required {
+	case "posthoc":
+		if globalXFRMObserver.mode != xfrmObserverPosthoc && globalXFRMObserver.mode != xfrmObserverHybrid {
+			return fmt.Errorf("posthoc profile is not provided by observer mode %q", globalXFRMObserver.mode)
+		}
+	case "hybrid":
+		if globalXFRMObserver.mode != xfrmObserverHybrid || !globalXFRMObserver.ready {
+			return fmt.Errorf("hybrid observer is required but not ready")
+		}
+	case "ebpf":
+		if globalXFRMObserver.mode != xfrmObserverEBPF || !globalXFRMObserver.ready {
+			return fmt.Errorf("eBPF observer is required but not ready")
+		}
+	default:
+		return fmt.Errorf("unsupported required observer profile %q", required)
+	}
+	return nil
+}
+
 func markXFRMObservationPoint() xfrmObservationPoint {
 	if globalXFRMObserver == nil {
 		return xfrmObservationPoint{Time: time.Now()}
@@ -298,13 +335,13 @@ func (o *xfrmObserver) annotate(meta map[string]string, mark xfrmObservationPoin
 		meta = map[string]string{}
 	}
 	meta["observer_mode"] = o.mode
-	if o.mode == xfrmObserverPosthoc {
-		meta["observer_source"] = "posthoc"
-		return meta
-	}
 	if meta["xfrm_mode"] != "apply" {
 		meta["observer_source"] = "dry-run"
 		meta["ebpf_matched"] = "not-applicable"
+		return meta
+	}
+	if o.mode == xfrmObserverPosthoc {
+		meta["observer_source"] = "posthoc"
 		return meta
 	}
 
@@ -370,21 +407,35 @@ func (o *xfrmObserver) minEventsForAction(action string) int {
 }
 
 func observeXFRMAppliedWithObserver(s protocol.Session, mark xfrmObservationPoint) map[string]string {
+	totalStart := time.Now()
+	posthocStart := time.Now()
 	meta := observeXFRMAppliedPosthoc(s)
+	meta["posthoc_duration_us"] = fmt.Sprintf("%d", time.Since(posthocStart).Microseconds())
 	if globalXFRMObserver == nil {
+		meta["observer_total_duration_us"] = fmt.Sprintf("%d", time.Since(totalStart).Microseconds())
 		return meta
 	}
+	correlationStart := time.Now()
 	meta = globalXFRMObserver.annotate(meta, mark, "apply")
-	logutil.Infof("pep", "xfrm_apply_observed observer_source=%s ebpf_matched=%s ebpf_event_count=%s ebpf_min_event_count=%s ebpf_probes=%s", meta["observer_source"], meta["ebpf_matched"], meta["ebpf_event_count"], meta["ebpf_min_event_count"], meta["ebpf_probes"])
+	meta["ebpf_correlation_duration_us"] = fmt.Sprintf("%d", time.Since(correlationStart).Microseconds())
+	meta["observer_total_duration_us"] = fmt.Sprintf("%d", time.Since(totalStart).Microseconds())
+	logutil.Infof("pep", "xfrm_apply_observed observer_source=%s ebpf_matched=%s ebpf_event_count=%s ebpf_min_event_count=%s posthoc_duration_us=%s ebpf_correlation_duration_us=%s observer_total_duration_us=%s ebpf_probes=%s", meta["observer_source"], meta["ebpf_matched"], meta["ebpf_event_count"], meta["ebpf_min_event_count"], meta["posthoc_duration_us"], meta["ebpf_correlation_duration_us"], meta["observer_total_duration_us"], meta["ebpf_probes"])
 	return meta
 }
 
 func observeXFRMDeletedWithObserver(s protocol.Session, mark xfrmObservationPoint) map[string]string {
+	totalStart := time.Now()
+	posthocStart := time.Now()
 	meta := observeXFRMDeletedPosthoc(s)
+	meta["posthoc_duration_us"] = fmt.Sprintf("%d", time.Since(posthocStart).Microseconds())
 	if globalXFRMObserver == nil {
+		meta["observer_total_duration_us"] = fmt.Sprintf("%d", time.Since(totalStart).Microseconds())
 		return meta
 	}
+	correlationStart := time.Now()
 	meta = globalXFRMObserver.annotate(meta, mark, "delete")
-	logutil.Infof("pep", "xfrm_delete_observed observer_source=%s ebpf_matched=%s ebpf_event_count=%s ebpf_min_event_count=%s ebpf_probes=%s", meta["observer_source"], meta["ebpf_matched"], meta["ebpf_event_count"], meta["ebpf_min_event_count"], meta["ebpf_probes"])
+	meta["ebpf_correlation_duration_us"] = fmt.Sprintf("%d", time.Since(correlationStart).Microseconds())
+	meta["observer_total_duration_us"] = fmt.Sprintf("%d", time.Since(totalStart).Microseconds())
+	logutil.Infof("pep", "xfrm_delete_observed observer_source=%s ebpf_matched=%s ebpf_event_count=%s ebpf_min_event_count=%s posthoc_duration_us=%s ebpf_correlation_duration_us=%s observer_total_duration_us=%s ebpf_probes=%s", meta["observer_source"], meta["ebpf_matched"], meta["ebpf_event_count"], meta["ebpf_min_event_count"], meta["posthoc_duration_us"], meta["ebpf_correlation_duration_us"], meta["observer_total_duration_us"], meta["ebpf_probes"])
 	return meta
 }

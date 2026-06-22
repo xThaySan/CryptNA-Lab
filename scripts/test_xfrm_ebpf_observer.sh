@@ -21,8 +21,11 @@ echo "[2] start lab with XFRM apply mode and eBPF observer overlay"
 XFRM_MODE=apply \
 PEP_ATTESTATION_ENABLED=${PEP_ATTESTATION_ENABLED:-1} \
 XFRM_OBSERVER=${XFRM_OBSERVER:-hybrid} \
-XFRM_EBPF_STRICT=${XFRM_EBPF_STRICT:-0} \
+XFRM_EBPF_STRICT=${XFRM_EBPF_STRICT:-1} \
+VERIFIER_REQUIRED_OBSERVER_PROFILE=${VERIFIER_REQUIRED_OBSERVER_PROFILE:-hybrid} \
 docker compose "${COMPOSE_FILES[@]}" up -d >/dev/null
+
+./scripts/wait_lab_ready.sh
 
 wait_for_log() {
   pattern="$1"
@@ -59,9 +62,8 @@ echo "$OUT"
 echo "$OUT" | grep -q '"authorized": true'
 
 echo "[6] verify eBPF metadata in PEP logs"
-# In hybrid mode, absence of eBPF events does not break authorization, but the
-# metadata must at least show that the eBPF backend was selected. If strict mode
-# is enabled, the Verifier will reject missing observed events.
+# Hybrid mode is fail-closed in this smoke test: both exact posthoc checks and
+# the configured minimum number of eBPF events must match.
 wait_for_log 'xfrm_apply_observed observer_source=.*ebpf_matched=true.*ebpf_event_count=[2-9]' 30 || {
   echo "ERROR: no matched eBPF apply observation summary in PEP logs"
   docker logs cryptna-pep 2>&1 | tail -160

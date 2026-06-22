@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"cryptna-lab/common/attest"
@@ -9,6 +11,14 @@ import (
 )
 
 func verifyTunnelAttestation(cfg ClientConfig, id ClientIdentity, payload protocol.AccessPayload, tunnel protocol.TunnelParams) error {
+	if value, ok := os.LookupEnv("CLIENT_ATTESTATION_REQUIRED"); ok {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "1", "true", "yes", "on":
+			cfg.AttestationRequired = true
+		case "0", "false", "no", "off":
+			cfg.AttestationRequired = false
+		}
+	}
 	hasAttestation := tunnel.CapacityToken != nil || tunnel.SABinding != nil
 	if !cfg.AttestationRequired && !hasAttestation {
 		return nil

@@ -8,9 +8,9 @@ echo "[2] verify PEP FORWARD policy is DROP"
 docker exec cryptna-pep iptables -S FORWARD | grep -q '^-P FORWARD DROP'
 
 echo "[3] verify only tunnel subnet to service:80 is allowed"
-docker exec cryptna-pep iptables -S FORWARD | grep -q -- '-s 10.200.0.0/24 -d 172.22.0.50/32'
+docker exec cryptna-pep iptables -S FORWARD | grep -q -- '-s 10.200.0.0/16 -d 172.22.0.50/32'
 docker exec cryptna-pep iptables -S FORWARD | grep -q -- '--dport 80'
-docker exec cryptna-pep iptables -S FORWARD | grep -q -- '-s 172.22.0.50/32 -d 10.200.0.0/24'
+docker exec cryptna-pep iptables -S FORWARD | grep -q -- '-s 172.22.0.50/32 -d 10.200.0.0/16'
 docker exec cryptna-pep iptables -S FORWARD | grep -q -- '--sport 80'
 
 echo "[4] create tunnel"

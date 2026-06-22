@@ -2,6 +2,8 @@
 set -euo pipefail
 
 N="${N:-50}"
+WARMUP="${WARMUP:-3}"
+CASE_ORDER="${CASE_ORDER:-baseline-first}"
 RESULT_DIR="experiments/results"
 mkdir -p "$RESULT_DIR"
 
@@ -34,7 +36,9 @@ summary = {
     'case': case,
     'attestation_enabled': attestation,
     'xfrm_mode': 'apply',
+    'case_order': __import__('os').environ.get('CRYPTNA_BENCH_CASE_ORDER', 'baseline-first'),
     'runs': len(rows),
+    'warmup_runs': int(__import__('os').environ.get('CRYPTNA_BENCH_WARMUP', '0')),
     'ok': len(ok),
     'failed': len(failed),
     'avg_ms': statistics.mean(values),
@@ -51,7 +55,7 @@ with summary_path.open('w', newline='') as f:
 print(','.join(summary.keys()))
 print(','.join(f'{summary[k]:.3f}' if isinstance(summary[k], float) else str(summary[k]) for k in summary))
 if failed:
-    print(f'{case}: {len(failed)} failed runs; keeping partial results', file=sys.stderr)
+    raise SystemExit(f'{case}: {len(failed)} failed runs; result is invalid')
 PY
 }
 
@@ -78,10 +82,19 @@ run_case() {
   SA_LIFETIME_SECONDS=3600 \
   SESSION_REAPER_INTERVAL_SECONDS=3600 \
   VERIFIER_TOKEN_TTL_SECONDS=3600 \
+  VERIFIER_REQUIRED_OBSERVER_PROFILE=posthoc \
     docker compose up -d --build >/dev/null
+
+  ./scripts/wait_lab_ready.sh
 
   echo "[case=$name] cleanup stale XFRM state"
   cleanup_xfrm
+
+  if [ "$WARMUP" -gt 0 ]; then
+    echo "[case=$name] run $WARMUP unmeasured warm-up handshakes"
+    docker exec -e XFRM_MODE=apply -e CRYPTNA_DEBUG=0 cryptna-client \
+      /app/client bench-handshake -n "$WARMUP" -out "/tmp/${name}_xfrm_warmup.csv" >/dev/null
+  fi
 
   echo "[case=$name] run $N sequential handshakes with real XFRM apply"
   set +e
@@ -100,8 +113,24 @@ run_case() {
   cleanup_xfrm
 }
 
-run_case baseline 0
-run_case history_bound 1
+rm -f "$RESULT_DIR/10_xfrm_apply_latency_compare_summary.csv"
+export CRYPTNA_BENCH_WARMUP="$WARMUP"
+export CRYPTNA_BENCH_CASE_ORDER="$CASE_ORDER"
+
+case "$CASE_ORDER" in
+  baseline-first)
+    run_case baseline 0
+    run_case history_bound 1
+    ;;
+  history-first)
+    run_case history_bound 1
+    run_case baseline 0
+    ;;
+  *)
+    echo "invalid CASE_ORDER=$CASE_ORDER (expected baseline-first or history-first)" >&2
+    exit 1
+    ;;
+esac
 
 COMBINED="$RESULT_DIR/10_xfrm_apply_latency_compare_summary.csv"
 head -n 1 "$RESULT_DIR/10_baseline_xfrm_apply_latency_summary.csv" > "$COMBINED"

@@ -5,7 +5,8 @@ chmod +x scripts/*.sh
 
 echo "[1] start attested V1 lab in dry-run mode"
 docker compose down -v --remove-orphans >/dev/null
-PEP_ATTESTATION_ENABLED=1 XFRM_MODE=dry-run CRYPTNA_DEBUG=0 docker compose up -d --build >/dev/null
+PEP_ATTESTATION_ENABLED=1 XFRM_MODE=dry-run CRYPTNA_DEBUG=0 VERIFIER_REQUIRED_OBSERVER_PROFILE=dry-run docker compose up -d --build >/dev/null
+./scripts/wait_lab_ready.sh
 
 echo "[2] create attested tunnel"
 OUT="$(docker exec -e XFRM_MODE=dry-run cryptna-client /app/client)"

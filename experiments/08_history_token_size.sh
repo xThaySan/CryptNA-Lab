@@ -11,7 +11,10 @@ PEP_ATTESTATION_ENABLED=1 \
 XFRM_MODE=dry-run \
 CRYPTNA_DEBUG=0 \
 VERIFIER_TOKEN_TTL_SECONDS=25 \
+VERIFIER_REQUIRED_OBSERVER_PROFILE=dry-run \
   docker compose up -d --build >/dev/null
+
+./scripts/wait_lab_ready.sh
 
 echo "[2] create tunnel and capture response JSON"
 RESP="$(docker exec -e XFRM_MODE=dry-run -e CRYPTNA_DEBUG=0 cryptna-client /app/client)"

@@ -24,4 +24,5 @@ RUN apk add --no-cache curl
 WORKDIR /app
 COPY --from=build /src/verifier/verifier /app/verifier
 COPY verifier/identity.json /app/identity.json
+COPY verifier/enrolled_peps.json /app/enrolled_peps.json
 CMD ["/app/verifier"]

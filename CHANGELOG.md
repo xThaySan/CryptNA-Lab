@@ -1,5 +1,16 @@
 # Changelog — SPA Noise IKpsk1 integration
 
+## History-bound enforcement hardening (2026-06-22)
+
+- Added stable PEP identity enrollment and mutual PEP/Verifier key pinning.
+- Made attested client behavior fail closed when a capability or SA binding is missing.
+- Persisted PEP history, active sessions, transaction markers, Verifier checkpoints, active lifecycle state, and idempotent token responses.
+- Replaced broad posthoc XFRM dumps with exact state/policy lookups and field matching; required observer profiles are enforced by both PEP and Verifier.
+- Expanded the tunnel address pool to `/16`, added restart/crash/concurrency tests, and added full cryptographic-plus-semantic appraisal benchmarks.
+- Added counterbalanced repeated trials, warm-up accounting, environment capture, observer-cost isolation, and raw result retention under `experiments/results/`.
+
+The sections below preserve the earlier implementation history; statements such as “not implemented yet” describe those historical revisions rather than the current repository state.
+
 ## Main changes
 
 ### 1. Common modules

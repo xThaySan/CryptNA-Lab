@@ -10,7 +10,8 @@ type AccessPayload struct {
 }
 
 // CapacityRequest is sent by the PEP to the Verifier to obtain a short-lived
-// attested capability binding a temporary PEP signing key to an attested PEP state.
+// capability binding an enrolled PEP signing key to an appraised software profile
+// and enforcement-history checkpoint.
 type CapacityRequest struct {
 	PEPID            string           `json:"pep_id"`
 	PEPSigningPubKey string           `json:"pep_signing_pubkey"`
@@ -35,6 +36,7 @@ type CapacityToken struct {
 	IssuedAt         string   `json:"iat"`
 	ExpiresAt        string   `json:"exp"`
 	MaxSALifetime    int      `json:"max_sa_lifetime_seconds"`
+	ObserverProfile  string   `json:"observer_profile"`
 	CheckpointHash   string   `json:"checkpoint_hash,omitempty"`
 	HistoryEpoch     uint64   `json:"history_epoch,omitempty"`
 	Signature        string   `json:"verifier_signature"`
@@ -65,7 +67,7 @@ type EnforcementEvent struct {
 }
 
 // EnforcementCheckpoint summarizes the accepted enforcement history at a point in
-// time. The PEP signs the checkpoint with the same temporary key later bound into
+// time. The PEP signs the checkpoint with the same enrolled key later bound into
 // the capacity token, proving possession of that key for the submitted history.
 type EnforcementCheckpoint struct {
 	Version                int    `json:"version"`

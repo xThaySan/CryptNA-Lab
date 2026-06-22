@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[1] ensure lab is up with XFRM apply mode"
-XFRM_MODE=apply CRYPTNA_DEBUG=1 docker compose up -d >/dev/null
+PEP_ATTESTATION_ENABLED="${PEP_ATTESTATION_ENABLED:-0}"
+CLIENT_ATTESTATION_REQUIRED="${CLIENT_ATTESTATION_REQUIRED:-$PEP_ATTESTATION_ENABLED}"
+VERIFIER_REQUIRED_OBSERVER_PROFILE="${VERIFIER_REQUIRED_OBSERVER_PROFILE:-posthoc}"
+
+echo "[1] start a clean lab with XFRM apply mode"
+docker compose down -v --remove-orphans >/dev/null 2>&1 || true
+XFRM_MODE=apply \
+PEP_ATTESTATION_ENABLED="$PEP_ATTESTATION_ENABLED" \
+CLIENT_ATTESTATION_REQUIRED="$CLIENT_ATTESTATION_REQUIRED" \
+VERIFIER_REQUIRED_OBSERVER_PROFILE="$VERIFIER_REQUIRED_OBSERVER_PROFILE" \
+CRYPTNA_DEBUG=1 \
+  docker compose up -d --build >/dev/null
+./scripts/wait_lab_ready.sh
 
 echo "[2] verify NAT-T listeners"
 docker exec cryptna-pep ss -lunp | grep -q ':4500'
@@ -20,6 +31,12 @@ OUT="$(docker exec cryptna-client /app/client)"
 echo "$OUT"
 
 echo "$OUT" | grep -q '"authorized": true'
+if [ "$CLIENT_ATTESTATION_REQUIRED" = "1" ]; then
+  echo "$OUT" | grep -q '"capacity_token"'
+  echo "$OUT" | grep -q '"sa_binding"'
+  echo "$OUT" | grep -q '"verifier_signature"'
+  echo "$OUT" | grep -q '"pep_signature"'
+fi
 
 SERVICE_IP="$(echo "$OUT" | sed -n 's/.*"service_ip": "\([^"]*\)".*/\1/p' | tail -1)"
 CLIENT_INNER_IP="$(echo "$OUT" | sed -n 's/.*"client_inner_ip": "\([^"]*\)".*/\1/p' | tail -1)"
@@ -73,7 +90,7 @@ fi
 echo "OK"
 
 echo "[7] verify service route back to client tunnel subnet"
-docker exec cryptna-service-http ip route | grep -q '10.200.0.0/24 via 172.22.0.40'
+docker exec cryptna-service-http ip route | grep -q '10.200.0.0/16 via 172.22.0.40'
 echo "OK"
 
 echo "[8] curl service through NAT-T IPsec tunnel"

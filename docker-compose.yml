@@ -11,6 +11,7 @@ x-client: &client-base
     - NET_ADMIN
   environment:
     <<: *debug-env
+    CLIENT_ATTESTATION_REQUIRED: ${CLIENT_ATTESTATION_REQUIRED:-${PEP_ATTESTATION_ENABLED:-0}}
   volumes:
     - ./client/config.json:/app/config.json:ro
   
@@ -84,6 +85,8 @@ services:
       VERIFIER_TOKEN_TTL_SECONDS: ${VERIFIER_TOKEN_TTL_SECONDS:-120}
       VERIFIER_ALLOWED_SCOPE: ${VERIFIER_ALLOWED_SCOPE:-svc-http}
       VERIFIER_MAX_SA_LIFETIME_SECONDS: ${VERIFIER_MAX_SA_LIFETIME_SECONDS:-60}
+      VERIFIER_ENROLLED_PEPS: /app/enrolled_peps.json
+      VERIFIER_REQUIRED_OBSERVER_PROFILE: ${VERIFIER_REQUIRED_OBSERVER_PROFILE:-posthoc}
       VERIFIER_STATE_PATH: /data/state.json
 
   pep:
@@ -100,6 +103,8 @@ services:
         ipv4_address: 172.22.0.40
     cap_add:
       - NET_ADMIN
+    volumes:
+      - pep_data:/data
     sysctls:
       net.ipv4.ip_forward: "1"
     environment:
@@ -110,10 +115,13 @@ services:
       XFRM_REQID_BASE: 1000
       SA_LIFETIME_SECONDS: ${SA_LIFETIME_SECONDS:-60}
       SESSION_REAPER_INTERVAL_SECONDS: ${SESSION_REAPER_INTERVAL_SECONDS:-5}
-      CLIENT_INNER_IP_PREFIX: 10.200.0
+      PEP_STATE_PATH: /data/state.json
+      PEP_STATE_PERSISTENCE_ENABLED: ${PEP_STATE_PERSISTENCE_ENABLED:-1}
+      PEP_ATTESTATION_KEY: /app/pep_attestation_key.json
+      PEP_VERIFIER_PUBLIC_KEY: wOtWIxwBDPM5duRETS3SkWZJOCu70G4AsS/NugQCl9U=
       CLIENT_INNER_IP_START: 10
       PEP_FIREWALL_ENABLED: ${PEP_FIREWALL_ENABLED:-1}
-      CLIENT_TUNNEL_CIDR: 10.200.0.0/24
+      CLIENT_TUNNEL_CIDR: ${CLIENT_TUNNEL_CIDR:-10.200.0.0/16}
       SERVICE_PORT: 80
       PEP_ATTESTATION_ENABLED: ${PEP_ATTESTATION_ENABLED:-0}
       PEP_ID: cryptna-pep-1
@@ -123,6 +131,7 @@ services:
       PEP_ATTESTATION_SCOPE: svc-http
       PEP_CAPACITY_MAX_SA_LIFETIME_SECONDS: ${PEP_CAPACITY_MAX_SA_LIFETIME_SECONDS:-60}
       XFRM_OBSERVER: ${XFRM_OBSERVER:-posthoc}
+      PEP_REQUIRED_OBSERVER_PROFILE: ${VERIFIER_REQUIRED_OBSERVER_PROFILE:-posthoc}
       XFRM_EBPF_STRICT: ${XFRM_EBPF_STRICT:-0}
       XFRM_EBPF_LOG_EVENTS: ${XFRM_EBPF_LOG_EVENTS:-0}
       XFRM_EBPF_MIN_APPLY_EVENTS: ${XFRM_EBPF_MIN_APPLY_EVENTS:-2}
@@ -175,3 +184,4 @@ networks:
 volumes:
   pip_data:
   verifier_data:
+  pep_data:

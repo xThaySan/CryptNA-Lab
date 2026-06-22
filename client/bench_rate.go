@@ -157,7 +157,6 @@ func benchHandshakeRate(args []string) {
 	defer f.Close()
 
 	w := csv.NewWriter(f)
-	defer w.Flush()
 
 	if err := w.Write([]string{
 		"run",
@@ -196,9 +195,14 @@ func benchHandshakeRate(args []string) {
 			log.Fatal(err)
 		}
 	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		log.Fatalf("flush open-loop benchmark CSV: %v", err)
+	}
 
 	if failures > 0 {
-		log.Fatalf("open-loop rate benchmark finished with %d/%d failures; CSV written to %s", failures, *n, *outPath)
+		log.Printf("open-loop rate benchmark finished with %d/%d failures; CSV written to %s", failures, *n, *outPath)
+		os.Exit(1)
 	}
 
 	fmt.Printf(

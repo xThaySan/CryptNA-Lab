@@ -56,10 +56,11 @@ and records all XFRM-related kernel events seen within that window.
 
 ## Security interpretation
 
-The eBPF observer improves separation between PEP intent logging and kernel-side
-observation. It does not prove complete kernel mediation. The guarantee remains
-bounded by the selected probes, the kernel, and the integrity of the monitor
-deployment.
+The eBPF observer distinguishes PEP intent from selected kernel-side events, but
+the monitor still executes in the privileged PEP container in this prototype.
+It does not prove complete kernel mediation or constitute an independent trust
+domain. The guarantee remains bounded by the selected global probes, transaction
+window correlation, the kernel, and the integrity of the monitor deployment.
 
 ## v0.11.5 note
 

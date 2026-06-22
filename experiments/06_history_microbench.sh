@@ -4,8 +4,8 @@ set -euo pipefail
 RESULT_DIR="experiments/results"
 RAW="$RESULT_DIR/06_history_microbench_raw.txt"
 CSV="$RESULT_DIR/06_history_microbench.csv"
-BENCHTIME="${BENCHTIME:-100x}"
-COUNT="${COUNT:-3}"
+BENCHTIME="${BENCHTIME:-1s}"
+COUNT="${COUNT:-10}"
 
 mkdir -p "$RESULT_DIR"
 

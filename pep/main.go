@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"net/netip"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,15 +25,24 @@ var (
 	sessionsMu sync.RWMutex
 	sessions   = map[string]protocol.Session{}
 
-	nextReqID         uint32
-	nextClientInnerID uint32
+	nextReqID          uint32
+	nextClientInnerID  uint32
+	enforcementHealthy atomic.Bool
 )
 
 func main() {
-	initAllocators()
 	initAttestation()
+	initAllocators()
 	initXFRMObserver()
 	defer shutdownXFRMObserver()
+	if err := validateXFRMObserverConfiguration(); err != nil {
+		log.Fatalf("validate XFRM observer configuration: %v", err)
+	}
+	enforcementHealthy.Store(true)
+	if err := validateRestoredSessions(); err != nil {
+		log.Fatalf("validate restored PEP sessions: %v", err)
+	}
+	startAttestation()
 	go sessionReaper()
 
 	if err := setupPEPFirewall(); err != nil {
@@ -38,6 +50,10 @@ func main() {
 	}
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if !enforcementHealthy.Load() {
+			http.Error(w, "unhealthy", http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok\n"))
 	})
@@ -59,6 +75,10 @@ func main() {
 func activateHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !enforcementHealthy.Load() {
+		http.Error(w, "PEP enforcement state is unhealthy", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -114,7 +134,11 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reqID := allocateReqID()
-	clientInnerIP := allocateClientInnerIP()
+	clientInnerIP, err := allocateClientInnerIP()
+	if err != nil {
+		http.Error(w, "client address pool exhausted", http.StatusServiceUnavailable)
+		return
+	}
 	clientOuterIP := req.ClientOuterIP
 	pepOuterIP := getenv("PEP_LOCAL_ENDPOINT_IP", "")
 	if pepOuterIP == "" {
@@ -190,6 +214,12 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	historyTransactionMu.Lock()
+	if err := setPendingPEPOperation("xfrm_apply", session); err != nil {
+		historyTransactionMu.Unlock()
+		enforcementHealthy.Store(false)
+		http.Error(w, "persist XFRM apply intent failed", http.StatusInternalServerError)
+		return
+	}
 	historyAppend(eventXFRMApplyIntent, &session, map[string]string{
 		"xfrm_mode":      getenv("XFRM_MODE", "dry-run"),
 		"xfrm_plan_hash": xfrmPlanHash(session.XFRM),
@@ -197,11 +227,20 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 	applyObservationMark := markXFRMObservationPoint()
 	if err := maybeApplyXFRM(session.XFRM); err != nil {
 		historyTransactionMu.Unlock()
+		enforcementHealthy.Store(false)
 		log.Printf("xfrm apply failed: %v", err)
 		http.Error(w, "xfrm apply failed", http.StatusInternalServerError)
 		return
 	}
-	historyAppend(eventXFRMApplyObserved, &session, observeXFRMAppliedWithObserver(session, applyObservationMark))
+	applyMeta := observeXFRMAppliedWithObserver(session, applyObservationMark)
+	historyAppend(eventXFRMApplyObserved, &session, applyMeta)
+	if !observationMeetsLocalProfile(applyMeta, "applied") {
+		_ = maybeDeleteXFRM(session.XFRM)
+		historyTransactionMu.Unlock()
+		enforcementHealthy.Store(false)
+		http.Error(w, "XFRM apply observation failed", http.StatusInternalServerError)
+		return
+	}
 
 	sessionsMu.Lock()
 	sessions[pepInSPI] = session
@@ -210,6 +249,12 @@ func activateHandler(w http.ResponseWriter, r *http.Request) {
 	historyAppend(eventSessionActivated, &session, map[string]string{
 		"attested": fmt.Sprintf("%t", resp.CapacityToken != nil),
 	})
+	if err := clearPendingPEPOperation(); err != nil {
+		historyTransactionMu.Unlock()
+		enforcementHealthy.Store(false)
+		http.Error(w, "persist activated session failed", http.StatusInternalServerError)
+		return
+	}
 	historyTransactionMu.Unlock()
 
 	logutil.Infof("pep", "activated service=%s client=%s pep_in_spi=%s client_in_spi=%s reqid=%d attested=%v", req.ServiceID, logutil.Short(req.ClientPubKey), pepInSPI, req.ClientInSPI, reqID, resp.CapacityToken != nil)
@@ -232,23 +277,70 @@ func initAllocators() {
 	if err != nil || baseReqID == 0 {
 		baseReqID = 1000
 	}
-	atomic.StoreUint32(&nextReqID, uint32(baseReqID-1))
+	maxReqID := uint32(baseReqID - 1)
 
 	baseInnerHost, err := strconv.ParseUint(getenv("CLIENT_INNER_IP_START", "10"), 10, 32)
 	if err != nil || baseInnerHost == 0 {
 		baseInnerHost = 10
 	}
-	atomic.StoreUint32(&nextClientInnerID, uint32(baseInnerHost-1))
+	maxInnerOffset := uint32(baseInnerHost - 1)
+	cidr := getenv("CLIENT_TUNNEL_CIDR", "10.200.0.0/16")
+	sessionsMu.RLock()
+	for _, session := range sessions {
+		if session.ReqID > maxReqID {
+			maxReqID = session.ReqID
+		}
+		if offset, err := clientInnerIPOffset(cidr, session.ClientInnerIP); err == nil && offset > maxInnerOffset {
+			maxInnerOffset = offset
+		}
+	}
+	sessionsMu.RUnlock()
+	atomic.StoreUint32(&nextReqID, maxReqID)
+	atomic.StoreUint32(&nextClientInnerID, maxInnerOffset)
 }
 
 func allocateReqID() uint32 {
 	return atomic.AddUint32(&nextReqID, 1)
 }
 
-func allocateClientInnerIP() string {
-	prefix := getenv("CLIENT_INNER_IP_PREFIX", "10.200.0")
-	host := atomic.AddUint32(&nextClientInnerID, 1)
-	return fmt.Sprintf("%s.%d", prefix, host)
+func allocateClientInnerIP() (string, error) {
+	offset := atomic.AddUint32(&nextClientInnerID, 1)
+	return clientInnerIPFromOffset(getenv("CLIENT_TUNNEL_CIDR", "10.200.0.0/16"), offset)
+}
+
+func clientInnerIPFromOffset(cidr string, offset uint32) (string, error) {
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil || !prefix.Addr().Is4() {
+		return "", fmt.Errorf("invalid IPv4 client tunnel CIDR %q", cidr)
+	}
+	prefix = prefix.Masked()
+	hostBits := 32 - prefix.Bits()
+	if hostBits < 2 {
+		return "", fmt.Errorf("client tunnel CIDR %q has no usable host pool", cidr)
+	}
+	maxHost := (uint64(1) << hostBits) - 2
+	if offset == 0 || uint64(offset) > maxHost {
+		return "", fmt.Errorf("client tunnel CIDR %q exhausted at offset %d", cidr, offset)
+	}
+	baseBytes := prefix.Addr().As4()
+	value := binary.BigEndian.Uint32(baseBytes[:]) + offset
+	var out [4]byte
+	binary.BigEndian.PutUint32(out[:], value)
+	return netip.AddrFrom4(out).String(), nil
+}
+
+func clientInnerIPOffset(cidr, address string) (uint32, error) {
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil || !prefix.Addr().Is4() {
+		return 0, fmt.Errorf("invalid IPv4 client tunnel CIDR %q", cidr)
+	}
+	addr, err := netip.ParseAddr(address)
+	if err != nil || !addr.Is4() || !prefix.Contains(addr) {
+		return 0, fmt.Errorf("address %q is outside %q", address, cidr)
+	}
+	baseBytes := prefix.Masked().Addr().As4()
+	addrBytes := addr.As4()
+	return binary.BigEndian.Uint32(addrBytes[:]) - binary.BigEndian.Uint32(baseBytes[:]), nil
 }
 
 func sessionReaper() {
@@ -266,7 +358,10 @@ func sessionReaper() {
 func cleanupExpiredSessions(now time.Time) {
 	historyTransactionMu.Lock()
 	defer historyTransactionMu.Unlock()
-	cleanupExpiredSessionsUnderHistoryLock(now)
+	if err := cleanupExpiredSessionsUnderHistoryLock(now); err != nil {
+		enforcementHealthy.Store(false)
+		log.Printf("expired session cleanup failed: %v", err)
+	}
 }
 
 // cleanupExpiredSessionsUnderHistoryLock removes expired sessions and records the
@@ -274,11 +369,11 @@ func cleanupExpiredSessions(now time.Time) {
 // historyTransactionMu. This is also used immediately before capacity renewal so a
 // checkpoint cannot be accepted while an expired XFRM state is still pending
 // deletion in the local session table.
-func cleanupExpiredSessionsUnderHistoryLock(now time.Time) {
+func cleanupExpiredSessionsUnderHistoryLock(now time.Time) error {
 	expired := make([]protocol.Session, 0)
 
-	sessionsMu.Lock()
-	for key, session := range sessions {
+	sessionsMu.RLock()
+	for _, session := range sessions {
 		expiresAt, err := time.Parse(time.RFC3339, session.ExpiresAt)
 		if err != nil {
 			logutil.Debugf("pep", "invalid session expiry pep_in_spi=%s expires_at=%s err=%v", session.PEPInSPI, session.ExpiresAt, err)
@@ -289,10 +384,9 @@ func cleanupExpiredSessionsUnderHistoryLock(now time.Time) {
 			continue
 		}
 
-		delete(sessions, key)
 		expired = append(expired, session)
 	}
-	sessionsMu.Unlock()
+	sessionsMu.RUnlock()
 
 	for _, session := range expired {
 		logutil.Infof("pep", "session expired, deleting XFRM client=%s service=%s pep_in_spi=%s client_in_spi=%s reqid=%d",
@@ -303,6 +397,9 @@ func cleanupExpiredSessionsUnderHistoryLock(now time.Time) {
 			session.ReqID,
 		)
 
+		if err := setPendingPEPOperation("xfrm_delete", session); err != nil {
+			return err
+		}
 		historyAppend(eventSessionExpired, &session, map[string]string{
 			"expires_at": session.ExpiresAt,
 		})
@@ -312,9 +409,49 @@ func cleanupExpiredSessionsUnderHistoryLock(now time.Time) {
 		})
 		deleteObservationMark := markXFRMObservationPoint()
 		if err := maybeDeleteXFRM(session.XFRM); err != nil {
-			log.Printf("xfrm delete failed: %v", err)
+			return fmt.Errorf("xfrm delete failed: %w", err)
 		}
-		historyAppend(eventXFRMDeleteObserved, &session, observeXFRMDeletedWithObserver(session, deleteObservationMark))
+		deleteMeta := observeXFRMDeletedWithObserver(session, deleteObservationMark)
+		historyAppend(eventXFRMDeleteObserved, &session, deleteMeta)
+		if !observationMeetsLocalProfile(deleteMeta, "deleted") {
+			return fmt.Errorf("XFRM delete observation failed for session %s", session.PEPInSPI)
+		}
+		sessionsMu.Lock()
+		delete(sessions, session.PEPInSPI)
+		sessionsMu.Unlock()
+		if err := clearPendingPEPOperation(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func observationSuccessful(metadata map[string]string, outcome string) bool {
+	if metadata == nil {
+		return false
+	}
+	return metadata[outcome] == "true" || (metadata[outcome] == "assumed" && metadata["xfrm_mode"] != "apply")
+}
+
+func observationMeetsLocalProfile(metadata map[string]string, outcome string) bool {
+	if !observationSuccessful(metadata, outcome) {
+		return false
+	}
+	required := strings.ToLower(getenv("PEP_REQUIRED_OBSERVER_PROFILE", "posthoc"))
+	if metadata["xfrm_mode"] != "apply" {
+		baseline := pepAttestation == nil || !pepAttestation.enabled
+		return metadata[outcome] == "assumed" && (required == "dry-run" || baseline)
+	}
+	source := strings.ToLower(metadata["observer_source"])
+	switch required {
+	case "posthoc":
+		return source == "posthoc" || source == "posthoc+ebpf"
+	case "hybrid":
+		return source == "posthoc+ebpf" && metadata["ebpf_matched"] == "true"
+	case "ebpf":
+		return source == "ebpf" && metadata["ebpf_matched"] == "true"
+	default:
+		return false
 	}
 }
 
