@@ -11,7 +11,7 @@ for PART in epub ns nm random; do
   OUT="$(docker exec cryptna-spa-send /app/spa-send -mode corrupt -packet "$PACKET" -corrupt-part "$PART")"
   echo "$OUT"
 
-  if ! echo "$OUT" | grep -q "timeout/no-response"; then
+  if ! grep -q "timeout/no-response" <<<"$OUT"; then
     echo "ERROR: corrupted packet part=$PART was not dropped"
     exit 1
   fi

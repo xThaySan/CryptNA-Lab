@@ -1,0 +1,5 @@
+metric,baseline_apply,history_bound_apply,delta_ms,delta_percent
+avg_ms,29.757,33.444,3.687,12.390
+median_ms,26.165,30.299,4.134,15.800
+p95_ms,53.196,55.505,2.309,4.341
+p99_ms,70.273,88.141,17.868,25.427

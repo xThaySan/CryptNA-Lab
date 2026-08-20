@@ -1,0 +1,2 @@
+case,attestation_enabled,xfrm_mode,case_order,runs,warmup_runs,ok,failed,avg_ms,median_ms,min_ms,max_ms,p95_ms,p99_ms
+baseline,0,apply,history-first,50,3,50,0,29.757,26.165,18.081,81.748,53.196,70.273

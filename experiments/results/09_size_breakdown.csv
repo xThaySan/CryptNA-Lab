@@ -1,0 +1,7 @@
+metric,bytes
+access_response_json_bytes,1657
+tunnel_json_bytes,1606
+capacity_token_json_bytes,618
+sa_binding_json_bytes,631
+capacity_token_plus_sa_binding_bytes,1249
+attestation_objects_share_percent,75.38

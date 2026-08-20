@@ -15,8 +15,8 @@ docker exec cryptna-pep ip xfrm state flush || true
 echo "[3] create tunnel"
 OUT="$(docker exec cryptna-client /app/client)"
 echo "$OUT"
-echo "$OUT" | grep -q '"authorized": true'
-echo "$OUT" | grep -q '"sa_lifetime_seconds": 10'
+grep -q '"authorized": true' <<<"$OUT"
+grep -q '"sa_lifetime_seconds": 10' <<<"$OUT"
 
 echo "[4] verify PEP session and XFRM exist"
 SESSIONS_BEFORE="$(docker exec cryptna-pep curl -s http://localhost:8080/sessions | jq 'length')"
@@ -67,7 +67,8 @@ if [ "$POLICIES_AFTER" -ne 0 ]; then
 fi
 
 echo "[7] verify cleanup logs"
-docker logs cryptna-pep --tail 100 | grep -q 'session expired, deleting XFRM'
-docker logs cryptna-pep --tail 100 | grep -q 'deleting XFRM'
+PEP_LOGS="$(docker logs cryptna-pep --tail 100 2>&1)"
+grep -q 'session expired, deleting XFRM' <<<"$PEP_LOGS"
+grep -q 'deleting XFRM' <<<"$PEP_LOGS"
 
 echo "XFRM expiry cleanup test OK"

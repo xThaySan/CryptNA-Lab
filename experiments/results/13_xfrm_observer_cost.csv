@@ -1,0 +1,7 @@
+case,observer,required_profile,samples,metric,mean_us,median_us,min_us,max_us,stdev_us
+posthoc,posthoc,posthoc,30,posthoc_duration,3652.167,2835.500,2276,16254,2640.331
+posthoc,posthoc,posthoc,30,ebpf_correlation_duration,1.533,1.000,0,10,2.177
+posthoc,posthoc,posthoc,30,observer_total_duration,3656.833,2843.000,2280,16260,2640.777
+hybrid,hybrid,hybrid,30,posthoc_duration,2847.967,2625.000,2267,6826,844.962
+hybrid,hybrid,hybrid,30,ebpf_correlation_duration,5.567,4.000,3,22,4.360
+hybrid,hybrid,hybrid,30,observer_total_duration,2857.567,2638.000,2272,6834,844.897

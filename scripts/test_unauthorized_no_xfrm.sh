@@ -21,7 +21,7 @@ echo "[4] send SPA for unauthorized service"
 OUT="$(docker exec cryptna-spa-send /app/spa-send -mode send -service svc-admin)"
 echo "$OUT"
 
-if ! echo "$OUT" | grep -q 'timeout/no-response'; then
+if ! grep -q 'timeout/no-response' <<<"$OUT"; then
   echo "ERROR: unauthorized service received a response"
   exit 1
 fi

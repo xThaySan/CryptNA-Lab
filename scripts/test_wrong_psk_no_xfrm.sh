@@ -23,7 +23,7 @@ echo "[4] send SPA with wrong PSK"
 OUT="$(docker exec cryptna-spa-send /app/spa-send -mode send -psk "$WRONG_PSK")"
 echo "$OUT"
 
-if ! echo "$OUT" | grep -q 'timeout/no-response'; then
+if ! grep -q 'timeout/no-response' <<<"$OUT"; then
   echo "ERROR: wrong PSK received a response"
   exit 1
 fi

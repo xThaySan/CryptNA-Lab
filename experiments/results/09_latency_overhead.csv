@@ -1,0 +1,5 @@
+metric,pep_state_persistence,baseline,history_bound,delta_ms,delta_percent,trials,N_per_trial,warmup_per_case,delta_stdev_ms
+avg_ms,disabled,1.018,1.225,0.211,20.776,10,1000,20,0.105
+median_ms,disabled,0.917,1.088,0.172,18.801,10,1000,20,0.049
+p95_ms,disabled,1.492,1.829,0.467,31.290,10,1000,20,0.289
+p99_ms,disabled,2.402,3.091,0.629,26.187,10,1000,20,0.774

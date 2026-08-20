@@ -13,7 +13,7 @@ echo "[3] first send should get a response"
 FIRST="$(docker exec cryptna-spa-send /app/spa-send -mode replay -packet "$PACKET")"
 echo "$FIRST"
 
-if ! echo "$FIRST" | grep -q "response size="; then
+if ! grep -q "response size=" <<<"$FIRST"; then
   echo "ERROR: first SPA send did not receive a response"
   exit 1
 fi
@@ -22,7 +22,7 @@ echo "[4] second send should be silently dropped"
 SECOND="$(docker exec cryptna-spa-send /app/spa-send -mode replay -packet "$PACKET")"
 echo "$SECOND"
 
-if ! echo "$SECOND" | grep -q "timeout/no-response"; then
+if ! grep -q "timeout/no-response" <<<"$SECOND"; then
   echo "ERROR: replayed SPA was not dropped"
   exit 1
 fi

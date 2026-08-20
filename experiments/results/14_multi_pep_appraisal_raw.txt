@@ -1,0 +1,36 @@
+goos: linux
+goarch: amd64
+pkg: cryptna-lab/verifier
+cpu: Intel(R) Core(TM) 7 240H
+BenchmarkConcurrentPEPAppraisal/peps_1_events_100-2         	    4857	    252663 ns/op	  156567 B/op	    2441 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_1_events_100-2         	    4304	    258058 ns/op	  156564 B/op	    2441 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_1_events_100-2         	    4149	    245517 ns/op	  156569 B/op	    2441 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_1_events_100-2         	    4880	    246411 ns/op	  156567 B/op	    2441 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_1_events_100-2         	    4878	    243965 ns/op	  156569 B/op	    2441 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_1_events_100-2         	    4147	    243644 ns/op	  156567 B/op	    2441 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_1_events_100-2         	    4272	    244385 ns/op	  156567 B/op	    2441 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_1_events_100-2         	    4280	    253950 ns/op	  156567 B/op	    2441 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_1_events_100-2         	    4298	    244974 ns/op	  156565 B/op	    2441 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_1_events_100-2         	    4417	    245825 ns/op	  156565 B/op	    2441 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_10_events_100-2        	     789	   1435808 ns/op	 1564910 B/op	   24388 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_10_events_100-2        	     801	   1487216 ns/op	 1564907 B/op	   24388 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_10_events_100-2        	     796	   1487243 ns/op	 1564870 B/op	   24388 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_10_events_100-2        	     814	   1455650 ns/op	 1564872 B/op	   24388 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_10_events_100-2        	     786	   1474804 ns/op	 1564901 B/op	   24388 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_10_events_100-2        	     774	   1474067 ns/op	 1564901 B/op	   24388 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_10_events_100-2        	     794	   1457128 ns/op	 1564892 B/op	   24388 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_10_events_100-2        	     775	   1450970 ns/op	 1564882 B/op	   24388 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_10_events_100-2        	     796	   1587010 ns/op	 1564831 B/op	   24388 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_10_events_100-2        	     795	   1479837 ns/op	 1564879 B/op	   24388 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_100_events_100-2       	      73	  15908997 ns/op	15647026 B/op	  243849 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_100_events_100-2       	      70	  15946053 ns/op	15646723 B/op	  243848 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_100_events_100-2       	      73	  16233070 ns/op	15646046 B/op	  243846 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_100_events_100-2       	      67	  16583333 ns/op	15646254 B/op	  243846 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_100_events_100-2       	      69	  16346850 ns/op	15646079 B/op	  243845 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_100_events_100-2       	      70	  15890342 ns/op	15647116 B/op	  243853 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_100_events_100-2       	      68	  16431014 ns/op	15646336 B/op	  243847 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_100_events_100-2       	      68	  16128584 ns/op	15646240 B/op	  243846 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_100_events_100-2       	      74	  15870885 ns/op	15646366 B/op	  243847 allocs/op
+BenchmarkConcurrentPEPAppraisal/peps_100_events_100-2       	      69	  15803030 ns/op	15646195 B/op	  243846 allocs/op
+PASS
+ok  	cryptna-lab/verifier	41.298s

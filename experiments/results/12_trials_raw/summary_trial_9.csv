@@ -1,0 +1,3 @@
+case,attestation_enabled,pep_state_persistence,case_order,runs,warmup_runs,ok,failed,avg_ms,median_ms,min_ms,max_ms,p95_ms,p99_ms
+baseline,0,disabled,baseline-first,1000,20,1000,0,1.047,0.915,0.743,12.339,1.679,2.403
+history_bound,1,disabled,baseline-first,1000,20,1000,0,1.218,1.101,0.915,4.642,1.786,2.800

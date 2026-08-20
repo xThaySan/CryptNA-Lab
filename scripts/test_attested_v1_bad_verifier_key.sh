@@ -39,6 +39,6 @@ if [ "$RC" -eq 0 ]; then
   exit 1
 fi
 
-echo "$OUT" | grep -qi 'attested PEP verification failed'
+grep -qi 'attested PEP verification failed' <<<"$OUT"
 
 echo "Attested V1 bad verifier key test OK"

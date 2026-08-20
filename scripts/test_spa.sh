@@ -15,9 +15,9 @@ OUT="$(docker exec cryptna-client /app/client)"
 echo "$OUT"
 
 echo "[4] check client received authorization"
-echo "$OUT" | grep -q '"authorized": true'
-echo "$OUT" | grep -q '"tunnel"'
-echo "$OUT" | grep -q '"pep_in_spi"'
+grep -q '"authorized": true' <<<"$OUT"
+grep -q '"tunnel"' <<<"$OUT"
+grep -q '"pep_in_spi"' <<<"$OUT"
 echo "OK"
 
 echo "[5] check PEP stored at least one session"

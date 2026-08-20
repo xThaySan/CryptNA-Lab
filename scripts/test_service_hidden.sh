@@ -23,7 +23,7 @@ echo "OK"
 echo "[4] create CRYPTNA tunnel"
 OUT="$(docker exec cryptna-client /app/client)"
 echo "$OUT"
-echo "$OUT" | grep -q '"authorized": true'
+grep -q '"authorized": true' <<<"$OUT"
 
 CLIENT_INNER_IP="$(echo "$OUT" | sed -n 's/.*"client_inner_ip": "\([^"]*\)".*/\1/p' | tail -1)"
 SERVICE_IP="$(echo "$OUT" | sed -n 's/.*"service_ip": "\([^"]*\)".*/\1/p' | tail -1)"
@@ -39,8 +39,8 @@ echo "service_ip=$SERVICE_IP"
 echo "[5] service should be reachable through CRYPTNA tunnel"
 HTTP_OUT="$(docker exec cryptna-client curl -sS --max-time 5 --interface "$CLIENT_INNER_IP" -D - "http://$SERVICE_IP")"
 echo "$HTTP_OUT" | head -20
-echo "$HTTP_OUT" | grep -q 'HTTP/1.1 200 OK'
-echo "$HTTP_OUT" | grep -q 'Welcome to nginx'
+grep -q 'HTTP/1.1 200 OK' <<<"$HTTP_OUT"
+grep -q 'Welcome to nginx' <<<"$HTTP_OUT"
 echo "OK"
 
 echo "[6] wait for tunnel expiry and cleanup"

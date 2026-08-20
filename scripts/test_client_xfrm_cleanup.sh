@@ -13,10 +13,10 @@ docker exec cryptna-pep ip xfrm policy flush || true
 docker exec cryptna-pep ip xfrm state flush || true
 
 echo "[3] create tunnel"
-OUT="$(docker exec cryptna-client /app/client)"
+OUT="$(docker exec cryptna-client /app/client 2>&1)"
 echo "$OUT"
-echo "$OUT" | grep -q '"authorized": true'
-echo "$OUT" | grep -q '"sa_lifetime_seconds": 10'
+grep -q '"authorized": true' <<<"$OUT"
+grep -q '"sa_lifetime_seconds": 10' <<<"$OUT"
 
 CLIENT_INNER_IP="$(echo "$OUT" | sed -n 's/.*"client_inner_ip": "\([^"]*\)".*/\1/p' | tail -1)"
 SERVICE_IP="$(echo "$OUT" | sed -n 's/.*"service_ip": "\([^"]*\)".*/\1/p' | tail -1)"
@@ -45,8 +45,19 @@ if [ "$CLIENT_POLICIES" -lt 2 ]; then
   exit 1
 fi
 
-docker exec cryptna-client ip route | grep -q "$SERVICE_IP"
-docker exec cryptna-client ip addr show lo | grep -q "$CLIENT_INNER_IP"
+CLIENT_ROUTES_BEFORE="$(docker exec cryptna-client ip route)"
+if ! grep -Fq -- "$SERVICE_IP" <<<"$CLIENT_ROUTES_BEFORE"; then
+  echo "ERROR: client route to service was not installed"
+  printf '%s\n' "$CLIENT_ROUTES_BEFORE"
+  exit 1
+fi
+
+CLIENT_LOOPBACK_BEFORE="$(docker exec cryptna-client ip addr show lo)"
+if ! grep -Fq -- "$CLIENT_INNER_IP" <<<"$CLIENT_LOOPBACK_BEFORE"; then
+  echo "ERROR: client inner IP was not installed"
+  printf '%s\n' "$CLIENT_LOOPBACK_BEFORE"
+  exit 1
+fi
 
 echo "[5] wait for client cleanup"
 sleep 13
@@ -67,19 +78,21 @@ if [ "$CLIENT_POLICIES_AFTER" -ne 0 ]; then
   exit 1
 fi
 
-if docker exec cryptna-client ip route | grep -q "$SERVICE_IP"; then
+CLIENT_ROUTES_AFTER="$(docker exec cryptna-client ip route)"
+if grep -Fq -- "$SERVICE_IP" <<<"$CLIENT_ROUTES_AFTER"; then
   echo "ERROR: client route to service still exists"
-  docker exec cryptna-client ip route
+  printf '%s\n' "$CLIENT_ROUTES_AFTER"
   exit 1
 fi
 
-if docker exec cryptna-client ip addr show lo | grep -q "$CLIENT_INNER_IP"; then
+CLIENT_LOOPBACK_AFTER="$(docker exec cryptna-client ip addr show lo)"
+if grep -Fq -- "$CLIENT_INNER_IP" <<<"$CLIENT_LOOPBACK_AFTER"; then
   echo "ERROR: client inner IP still exists"
-  docker exec cryptna-client ip addr show lo
+  printf '%s\n' "$CLIENT_LOOPBACK_AFTER"
   exit 1
 fi
 
 echo "[7] verify client cleanup log"
-docker logs cryptna-client --tail 80 | grep -q 'scheduling local XFRM cleanup'
+grep -q 'scheduling local XFRM cleanup' <<<"$OUT"
 
 echo "Client XFRM cleanup test OK"

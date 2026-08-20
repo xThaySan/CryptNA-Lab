@@ -22,6 +22,6 @@ if [ "$RC" -eq 0 ]; then
   echo "ERROR: client accepted a response with missing required attestation" >&2
   exit 1
 fi
-echo "$OUT" | grep -qi 'attestation required'
+grep -qi 'attestation required' <<<"$OUT"
 
 echo "Missing required attestation fail-closed test OK"

@@ -16,8 +16,8 @@ CRYPTNA_DEBUG=1 \
 ./scripts/wait_lab_ready.sh
 
 echo "[2] verify NAT-T listeners"
-docker exec cryptna-pep ss -lunp | grep -q ':4500'
-docker exec cryptna-client ss -lunp | grep -q ':4500'
+docker exec cryptna-pep ss -lunp | grep ':4500' >/dev/null
+docker exec cryptna-client ss -lunp | grep ':4500' >/dev/null
 echo "OK"
 
 echo "[3] cleanup XFRM state"
@@ -30,12 +30,12 @@ echo "[4] create CRYPTNA tunnel"
 OUT="$(docker exec cryptna-client /app/client)"
 echo "$OUT"
 
-echo "$OUT" | grep -q '"authorized": true'
+grep -q '"authorized": true' <<<"$OUT"
 if [ "$CLIENT_ATTESTATION_REQUIRED" = "1" ]; then
-  echo "$OUT" | grep -q '"capacity_token"'
-  echo "$OUT" | grep -q '"sa_binding"'
-  echo "$OUT" | grep -q '"verifier_signature"'
-  echo "$OUT" | grep -q '"pep_signature"'
+  grep -q '"capacity_token"' <<<"$OUT"
+  grep -q '"sa_binding"' <<<"$OUT"
+  grep -q '"verifier_signature"' <<<"$OUT"
+  grep -q '"pep_signature"' <<<"$OUT"
 fi
 
 SERVICE_IP="$(echo "$OUT" | sed -n 's/.*"service_ip": "\([^"]*\)".*/\1/p' | tail -1)"
@@ -90,15 +90,15 @@ fi
 echo "OK"
 
 echo "[7] verify service route back to client tunnel subnet"
-docker exec cryptna-service-http ip route | grep -q '10.200.0.0/16 via 172.22.0.40'
+docker exec cryptna-service-http ip route | grep '10.200.0.0/16 via 172.22.0.40' >/dev/null
 echo "OK"
 
 echo "[8] curl service through NAT-T IPsec tunnel"
 HTTP_OUT="$(docker exec cryptna-client curl -sS --max-time 5 --interface "$CLIENT_INNER_IP" -D - "http://$SERVICE_IP")"
 echo "$HTTP_OUT" | head -20
 
-echo "$HTTP_OUT" | grep -q 'HTTP/1.1 200 OK'
-echo "$HTTP_OUT" | grep -q 'Welcome to nginx'
+grep -q 'HTTP/1.1 200 OK' <<<"$HTTP_OUT"
+grep -q 'Welcome to nginx' <<<"$HTTP_OUT"
 echo "OK"
 
 echo "[9] verify XFRM counters moved"

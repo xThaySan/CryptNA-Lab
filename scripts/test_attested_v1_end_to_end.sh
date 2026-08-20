@@ -10,11 +10,11 @@ PEP_ATTESTATION_ENABLED=1 XFRM_MODE=dry-run CRYPTNA_DEBUG=0 VERIFIER_REQUIRED_OB
 
 echo "[2] create attested tunnel"
 OUT="$(docker exec -e XFRM_MODE=dry-run cryptna-client /app/client)"
-echo "$OUT" | grep -q '"authorized": true'
-echo "$OUT" | grep -q '"capacity_token"'
-echo "$OUT" | grep -q '"sa_binding"'
-echo "$OUT" | grep -q '"verifier_signature"'
-echo "$OUT" | grep -q '"pep_signature"'
+grep -q '"authorized": true' <<<"$OUT"
+grep -q '"capacity_token"' <<<"$OUT"
+grep -q '"sa_binding"' <<<"$OUT"
+grep -q '"verifier_signature"' <<<"$OUT"
+grep -q '"pep_signature"' <<<"$OUT"
 
 echo "[3] verify PEP session exists"
 docker exec cryptna-pep curl -s http://localhost:8080/sessions | jq -e 'length >= 1' >/dev/null

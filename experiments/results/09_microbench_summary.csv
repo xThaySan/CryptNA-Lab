@@ -1,0 +1,17 @@
+benchmark,runs,median_us,mean_us,min_us,max_us,median_bytes_per_op,median_allocs_per_op
+BenchmarkHashEnforcementCheckpoint,10,0.607,0.606,0.599,0.611,592.000,4.000
+BenchmarkHashEnforcementEvent,10,0.502,0.503,0.495,0.510,512.000,4.000
+BenchmarkVerifyEnforcementPolicy/active_sessions_1,10,1.415,1.417,1.396,1.448,996.000,27.000
+BenchmarkVerifyEnforcementPolicy/active_sessions_10,10,12.523,12.534,12.452,12.656,9136.000,249.000
+BenchmarkVerifyEnforcementPolicy/active_sessions_100,10,123.263,123.292,121.588,124.722,102228.000,2421.000
+BenchmarkVerifyEnforcementPolicy/active_sessions_500,10,711.409,711.801,700.264,734.945,678856.000,12034.000
+BenchmarkVerifyEnforcementPolicy/deleted_sessions_1,10,2.581,2.583,2.546,2.628,1536.000,51.000
+BenchmarkVerifyEnforcementPolicy/deleted_sessions_10,10,23.919,23.930,23.682,24.190,12193.000,486.000
+BenchmarkVerifyEnforcementPolicy/deleted_sessions_100,10,231.991,232.607,229.949,237.209,121021.000,4812.000
+BenchmarkVerifyEnforcementPolicy/deleted_sessions_500,10,1218.414,1216.934,1200.149,1234.464,651390.000,24018.000
+BenchmarkVerifyFullHistoryAppraisal/events_100,10,232.331,232.990,230.023,236.048,156101.000,2436.000
+BenchmarkVerifyFullHistoryAppraisal/events_1000,10,2096.530,2096.663,2075.763,2120.034,1580556.500,24947.000
+BenchmarkVerifyHistoryEvidence/events_1,10,30.157,30.360,29.929,31.265,1600.000,12.000
+BenchmarkVerifyHistoryEvidence/events_10,10,36.157,36.279,35.698,37.741,6785.000,48.000
+BenchmarkVerifyHistoryEvidence/events_100,10,93.596,93.624,92.521,95.419,58632.000,408.000
+BenchmarkVerifyHistoryEvidence/events_1000,10,676.633,677.213,667.984,687.367,577127.000,4008.000

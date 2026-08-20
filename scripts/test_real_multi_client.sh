@@ -21,14 +21,14 @@ docker exec cryptna-pep ip xfrm state flush || true
 
 echo "[3] authorize client1"
 OUT1="$(docker exec cryptna-client /app/client)"
-echo "$OUT1" | grep -q '"authorized": true'
+grep -q '"authorized": true' <<<"$OUT1"
 
 IP1="$(echo "$OUT1" | sed -n 's/.*"client_inner_ip": "\([^"]*\)".*/\1/p' | tail -1)"
 SVC1="$(echo "$OUT1" | sed -n 's/.*"service_ip": "\([^"]*\)".*/\1/p' | tail -1)"
 
 echo "[4] authorize client2"
 OUT2="$(docker exec cryptna-client-2 /app/client)"
-echo "$OUT2" | grep -q '"authorized": true'
+grep -q '"authorized": true' <<<"$OUT2"
 
 IP2="$(echo "$OUT2" | sed -n 's/.*"client_inner_ip": "\([^"]*\)".*/\1/p' | tail -1)"
 SVC2="$(echo "$OUT2" | sed -n 's/.*"service_ip": "\([^"]*\)".*/\1/p' | tail -1)"
@@ -48,7 +48,7 @@ echo "$SESSIONS" | jq -e 'length == 2' >/dev/null
 echo "$SESSIONS" | jq -e '[.[].client_outer_ip] | sort == ["172.20.0.10","172.20.0.11"]' >/dev/null
 
 echo "[6] verify service access from both clients"
-docker exec cryptna-client curl -sS --max-time 5 --interface "$IP1" "http://$SVC1" | grep -q "Welcome to nginx"
-docker exec cryptna-client-2 curl -sS --max-time 5 --interface "$IP2" "http://$SVC2" | grep -q "Welcome to nginx"
+docker exec cryptna-client curl -sS --max-time 5 --interface "$IP1" "http://$SVC1" | grep "Welcome to nginx" >/dev/null
+docker exec cryptna-client-2 curl -sS --max-time 5 --interface "$IP2" "http://$SVC2" | grep "Welcome to nginx" >/dev/null
 
 echo "Real multi-client NAT-T XFRM test OK"

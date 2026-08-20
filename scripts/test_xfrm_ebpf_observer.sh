@@ -59,7 +59,7 @@ docker exec cryptna-pep ip xfrm state flush || true
 echo "[5] create tunnel"
 OUT="$(docker exec cryptna-client /app/client)"
 echo "$OUT"
-echo "$OUT" | grep -q '"authorized": true'
+grep -q '"authorized": true' <<<"$OUT"
 
 echo "[6] verify eBPF metadata in PEP logs"
 # Hybrid mode is fail-closed in this smoke test: both exact posthoc checks and
@@ -70,16 +70,17 @@ wait_for_log 'xfrm_apply_observed observer_source=.*ebpf_matched=true.*ebpf_even
   exit 1
 }
 
-if docker logs cryptna-pep 2>&1 | grep -q 'Invalid argument'; then
+PEP_LOGS="$(docker logs cryptna-pep 2>&1)"
+if grep -q 'Invalid argument' <<<"$PEP_LOGS"; then
   echo "ERROR: bpftrace emitted Invalid argument diagnostics"
-  docker logs cryptna-pep 2>&1 | grep -E 'xfrm-ebpf stderr|Invalid argument' | tail -80
+  grep -E 'xfrm-ebpf stderr|Invalid argument' <<<"$PEP_LOGS" | tail -80
   exit 1
 fi
 
 
-if ! docker logs cryptna-pep 2>&1 | grep -q 'XFRM eBPF selected probes'; then
+if ! grep -q 'XFRM eBPF selected probes' <<<"$PEP_LOGS"; then
   echo "ERROR: eBPF monitor did not report selected probes"
-  docker logs cryptna-pep 2>&1 | tail -160
+  tail -160 <<<"$PEP_LOGS"
   exit 1
 fi
 
